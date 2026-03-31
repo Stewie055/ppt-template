@@ -1,3 +1,9 @@
+"""`ppt_template_sdk` 对外公开的稳定接口入口。
+
+调用方通常只需要从这个模块导入引擎、内容模型、操作模块和异常类型，而无需
+直接了解内部子模块结构。
+"""
+
 from .context import RenderContext
 from .engine import PptTemplateEngine
 from .exceptions import (

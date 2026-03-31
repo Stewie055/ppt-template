@@ -1,3 +1,9 @@
+"""PptOperations 提供独立的 PPT 结构操作能力。
+
+该模块面向需要在渲染前后调整 PPT 结构的调用方，覆盖 slide、section 和
+表格操作。所有公开索引均为 ``0-based``。
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -21,22 +27,55 @@ def _tag(namespace: str, name: str) -> str:
 
 
 class PptOperations:
+    """封装常见的 PPT 结构与表格操作。
+
+    示例：
+        ```python
+        ops = PptOperations.load(template_path="examples/assets/operations_template.pptx")
+        ops.insert_slide(target_index=1, layout_index=6)
+        ops.add_section(name="正文", start_slide_index=1)
+        ops.save_to_path("examples/output/operations_output.pptx")
+        ```
+    """
+
     def __init__(self, presentation, adapter: Optional[PptxAdapter] = None):
+        """用现有 Presentation 初始化操作对象。"""
+
         self.presentation = presentation
         self.adapter = adapter or PptxAdapter()
 
     @classmethod
     def load(cls, template_path: Optional[str] = None, template_bytes: Optional[bytes] = None):
+        """从路径或字节流加载 PPT 并创建操作对象。
+
+        参数：
+            template_path: 模板路径，与 ``template_bytes`` 二选一。
+            template_bytes: 模板字节流，与 ``template_path`` 二选一。
+        """
+
         adapter = PptxAdapter()
         return cls(adapter.load(template_path=template_path, template_bytes=template_bytes), adapter=adapter)
 
     def save_to_bytes(self) -> bytes:
+        """将当前 Presentation 保存为内存字节流。"""
+
         return self.adapter.save_to_bytes(self.presentation)
 
     def save_to_path(self, output_path: str) -> None:
+        """将当前 Presentation 保存到指定路径。"""
+
         self.adapter.save_to_path(self.presentation, output_path)
 
     def delete_slide(self, slide_index: int) -> int:
+        """删除指定索引的 slide。
+
+        参数：
+            slide_index: ``0-based`` slide 索引。
+
+        返回：
+            被删除 slide 的内部 ``slide_id``。
+        """
+
         slide_id_el = self._get_slide_id_element(slide_index)
         slide_id = int(slide_id_el.get("id"))
         rel_id = slide_id_el.get(_tag(R_NS, "id"))
@@ -50,6 +89,16 @@ class PptOperations:
         return slide_id
 
     def insert_slide(self, target_index: int, layout_index: int):
+        """使用模板现有 ``layout_index`` 新建并插入 slide。
+
+        参数：
+            target_index: 新 slide 插入位置，使用 ``0-based`` 索引。
+            layout_index: ``presentation.slide_layouts`` 中的 layout 索引。
+
+        返回：
+            新建的 slide 对象。
+        """
+
         if target_index < 0 or target_index > len(self.presentation.slides):
             raise OperationError(f"target_index {target_index} out of range")
         if layout_index < 0 or layout_index >= len(self.presentation.slide_layouts):
@@ -76,6 +125,17 @@ class PptOperations:
         return slide
 
     def add_section(self, name: str, start_slide_index: int) -> None:
+        """在指定 slide 位置开始一个新的 section。
+
+        参数：
+            name: section 名称。
+            start_slide_index: section 起始 slide 的 ``0-based`` 索引。
+
+        说明：
+            若模板当前不存在 section，将自动初始化 section 列表。
+            若目标 slide 已是某个 section 的起始页，则该 section 会被重命名。
+        """
+
         slide_ids = self._slide_ids_in_order()
         if not slide_ids:
             raise OperationError("cannot add a section to an empty presentation")
@@ -110,6 +170,15 @@ class PptOperations:
         self._write_sections(groups)
 
     def delete_section(self, section_index: int) -> None:
+        """删除指定 section，但保留其中 slides。
+
+        参数：
+            section_index: ``0-based`` section 索引。
+
+        说明：
+            被删除 section 中的 slides 会并入相邻 section，不会从文档中删除。
+        """
+
         groups = self._read_sections()
         if not groups:
             raise OperationError("presentation does not contain sections")
@@ -127,6 +196,18 @@ class PptOperations:
         self._write_sections(groups)
 
     def delete_table_row(self, slide_index: int, shape_locator: Union[int, str], row_index: int) -> None:
+        """删除指定表格中的一行。
+
+        参数：
+            slide_index: 目标 slide 的 ``0-based`` 索引。
+            shape_locator: 推荐传 ``shape_id``，也支持 ``shape_name``。
+            row_index: 待删除的 ``0-based`` 行索引。
+
+        异常：
+            OperationError: 行越界，或表格已存在合并单元格。
+            ShapeOperationError: 目标 shape 不存在或不是表格。
+        """
+
         table = self._resolve_table(slide_index, shape_locator)
         self._ensure_unmerged_table(table)
         if row_index < 0 or row_index >= len(table.rows):
@@ -134,6 +215,14 @@ class PptOperations:
         table._tbl.remove(table._tbl.tr_lst[row_index])
 
     def delete_table_column(self, slide_index: int, shape_locator: Union[int, str], column_index: int) -> None:
+        """删除指定表格中的一列。
+
+        参数：
+            slide_index: 目标 slide 的 ``0-based`` 索引。
+            shape_locator: 推荐传 ``shape_id``，也支持 ``shape_name``。
+            column_index: 待删除的 ``0-based`` 列索引。
+        """
+
         table = self._resolve_table(slide_index, shape_locator)
         self._ensure_unmerged_table(table)
         if column_index < 0 or column_index >= len(table.columns):
@@ -151,6 +240,20 @@ class PptOperations:
         last_row: int,
         last_col: int,
     ) -> None:
+        """合并指定矩形区域内的表格单元格。
+
+        参数：
+            slide_index: 目标 slide 的 ``0-based`` 索引。
+            shape_locator: 推荐传 ``shape_id``，也支持 ``shape_name``。
+            first_row: 合并区域左上角行索引。
+            first_col: 合并区域左上角列索引。
+            last_row: 合并区域右下角行索引。
+            last_col: 合并区域右下角列索引。
+
+        异常：
+            OperationError: 合并区域非法或越界。
+        """
+
         table = self._resolve_table(slide_index, shape_locator)
         self._validate_merge_bounds(table, first_row, first_col, last_row, last_col)
         table.cell(first_row, first_col).merge(table.cell(last_row, last_col))
