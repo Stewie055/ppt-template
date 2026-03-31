@@ -1,12 +1,70 @@
 """单文件版 `ppt_template_sdk`。
 
-该文件可直接复制到用户项目中使用，导入方式保持：
+这是一个可直接 vendoring 到业务项目中的 PPT 模板渲染 SDK 单文件发行版。
+它保留了包版的主要公开能力，但把实现集中到一个文件中，方便像 `bottle.py`
+ 那样直接复制使用。
+
+这个 package 解决的问题：
+
+- 读取 `.pptx` 模板
+- 识别 `ph:<type>:<key>` 形式的 shape 占位块
+- 调用业务侧注册的 renderer 生成文本、图片、表格、图表内容
+- 将内容写回 PPT
+- 执行普通文本框和表格单元格字段替换
+- 提供常见的 slide、section 和表格结构操作
+
+这个 package 不负责：
+
+- 业务数据获取
+- 图表业务逻辑生成
+- 文案生成
+- 页面编排决策
+
+公开主入口：
+
+- ``PptTemplateEngine``：模板渲染主入口
+- ``RendererRegistry`` / ``BaseRenderer``：占位块渲染注册
+- ``RenderContext``：统一上下文取值
+- ``TextReplacer``：独立字段替换
+- ``PptOperations``：PPT 结构操作
+- ``EngineOptions``、内容模型、结果模型、异常体系
+
+依赖：
+
+- Python ``>= 3.10``
+- ``python-pptx``
+
+推荐使用方式：
+
+1. 将本文件复制到业务项目中
+2. 文件名保持为 ``ppt_template_sdk.py``
+3. 安装 ``python-pptx``
+4. 继续使用与包版一致的导入方式
+
+最小示例：
 
 ```python
-from ppt_template_sdk import PptTemplateEngine, RendererRegistry
+from ppt_template_sdk import PptTemplateEngine, RenderContext, RendererRegistry, TextContent
+
+registry = RendererRegistry()
+
+@registry.renderer("title")
+def render_title(placeholder, context):
+    return TextContent(text=context.get_value("project.name", "未命名项目"))
+
+engine = PptTemplateEngine(registry=registry)
+result = engine.render(
+    template_path="report_template.pptx",
+    output_path="report_output.pptx",
+    context=RenderContext(data={"project": {"name": "北极星"}}),
+)
 ```
 
-它覆盖当前包版的全部公开能力，但不依赖仓库内其他本地模块。
+说明：
+
+- 本文件覆盖当前包版的全部公开能力
+- 适合“复制一个文件进项目”的场景
+- 不建议与包版在同一解释器环境中混用
 """
 
 from __future__ import annotations
@@ -32,50 +90,104 @@ PLACEHOLDER_RE = re.compile(r"^ph:(text|image|table|chart):([\w\.-]+)$")
 
 
 class PptTemplateSdkError(Exception):
-    """SDK 所有自定义异常的基类。"""
+    """SDK 所有自定义异常的基类。
+
+    当调用方不关心具体错误细分时，可以统一捕获这个异常。
+    """
 
 
 class TemplateParseError(PptTemplateSdkError):
-    """模板解析阶段发生错误时抛出。"""
+    """模板解析阶段发生错误时抛出。
+
+    这类错误通常说明模板结构本身存在问题，而不是业务 renderer 的问题。
+    """
 
 
 class PlaceholderFormatError(TemplateParseError):
-    """占位块命名不符合 ``ph:<type>:<key>`` 规范时抛出。"""
+    """占位块命名不符合 ``ph:<type>:<key>`` 规范时抛出。
+
+    适合提示模板作者修正 `shape.name`。
+    """
 
 
 class DuplicatePlaceholderError(PptTemplateSdkError):
-    """检测到重复占位块 key 且当前策略不允许时抛出。"""
+    """检测到重复占位块 key 且当前策略不允许时抛出。
+
+    常见于 ``duplicate_key_policy="error"`` 的场景。
+    """
 
 
 class RendererNotFoundError(PptTemplateSdkError):
-    """模板中的占位块缺少对应 renderer 时抛出。"""
+    """模板中的占位块缺少对应 renderer 时抛出。
+
+    这通常意味着模板 key 和业务侧注册 key 不一致。
+    """
 
 
 class ContentTypeMismatchError(PptTemplateSdkError):
-    """renderer 返回的内容类型与占位块类型不匹配时抛出。"""
+    """renderer 返回的内容类型与占位块类型不匹配时抛出。
+
+    例如模板是 ``ph:image:cover``，renderer 却返回 ``TextContent``。
+    """
 
 
 class ShapeOperationError(PptTemplateSdkError):
-    """对底层 shape 执行写回或定位操作失败时抛出。"""
+    """对底层 shape 执行写回或定位操作失败时抛出。
+
+    常见于目标 shape 不支持某种写回方式，或按给定定位信息找不到 shape。
+    """
 
 
 class FieldReplaceError(PptTemplateSdkError):
-    """文本字段替换阶段发生异常时抛出。"""
+    """文本字段替换阶段发生异常时抛出。
+
+    当字段替换遍历、取值或写回过程失败时，调用方可捕获此异常。
+    """
 
 
 class OperationError(PptTemplateSdkError):
-    """执行 slide、section 或表格结构操作失败时抛出。"""
+    """执行 slide、section 或表格结构操作失败时抛出。
+
+    例如索引越界、非法 merge 区域，或对已合并表格删行删列。
+    """
 
 
 @dataclass(slots=True)
 class RenderContext:
-    """承载模板渲染和文本替换所需的业务上下文。"""
+    """承载模板渲染和文本替换所需的业务上下文。
+
+    参数：
+        data: 面向模板字段替换和简单 renderer 的主数据，可为 ``dict``、对象、
+            dataclass 或 pydantic 风格对象。
+        extras: 复杂对象、服务对象或聚合数据，可供 renderer 自行读取。
+
+    示例：
+        ```python
+        context = RenderContext(
+            data={"project": {"name": "北极星"}},
+            extras={"report": report},
+        )
+        ```
+    """
 
     data: Any
     extras: dict[str, Any] = field(default_factory=dict)
 
     def get_value(self, path: str, default: Any = None) -> Any:
-        """按点路径读取 ``data`` 中的值。"""
+        """按点路径读取 ``data`` 中的值。
+
+        参数：
+            path: 点路径，例如 ``"project.name"`` 或 ``"items.0.title"``。
+            default: 路径不存在时返回的默认值。
+
+        返回：
+            解析后的值；若路径不存在，则返回 ``default``。
+
+        示例：
+            ```python
+            value = context.get_value("project.name", "未命名项目")
+            ```
+        """
 
         current = self.data
         for part in path.split("."):
@@ -85,7 +197,10 @@ class RenderContext:
         return current
 
     def has_value(self, path: str) -> bool:
-        """判断给定点路径是否存在有效值。"""
+        """判断给定点路径是否存在有效值。
+
+        适合在业务 renderer 中先探测某个字段是否存在，再决定采用何种渲染策略。
+        """
 
         return self.get_value(path, _MISSING) is not _MISSING
 
@@ -111,7 +226,16 @@ class RenderContext:
 
 @dataclass(slots=True)
 class EngineOptions:
-    """控制渲染引擎行为的配置对象。"""
+    """控制渲染引擎行为的配置对象。
+
+    字段说明：
+        duplicate_key_policy: 重复占位块 key 的处理策略，支持 ``error`` 和
+            ``broadcast``。
+        enable_text_field_replace: 是否启用普通文本与表格单元格字段替换。
+        text_field_pattern: 文本字段匹配正则，默认支持 ``{{path.to.value}}``。
+        text_field_replace_mode: 当前版本仅支持 ``plain``。
+        strict: 是否在校验失败时尽早报错。
+    """
 
     duplicate_key_policy: str = "broadcast"
     enable_text_field_replace: bool = True
@@ -121,26 +245,43 @@ class EngineOptions:
 
 
 class Content:
-    """所有渲染内容类型的基类。"""
+    """所有渲染内容类型的基类。
+
+    业务 renderer 不直接操作底层 PPT 对象，而是返回 ``Content`` 子类，由
+    SDK 统一完成写回。
+    """
 
 
 @dataclass(slots=True)
 class TextContent(Content):
-    """文本占位块的渲染结果。"""
+    """文本占位块的渲染结果。
+
+    字段说明：
+        text: 要写回到目标文本 shape 的完整字符串。
+    """
 
     text: str
 
 
 @dataclass(slots=True)
 class ImageContent(Content):
-    """图片占位块的渲染结果。"""
+    """图片占位块的渲染结果。
+
+    字段说明：
+        image_path: 本地图片路径，SDK 会将其插入到占位块区域。
+    """
 
     image_path: str
 
 
 @dataclass(slots=True)
 class TableContent(Content):
-    """表格占位块的渲染结果。"""
+    """表格占位块的渲染结果。
+
+    字段说明：
+        headers: 表头行；为空时表示只有数据行。
+        rows: 二维数组，每个子列表代表一行。
+    """
 
     headers: list[str]
     rows: list[list[str]]
@@ -148,14 +289,27 @@ class TableContent(Content):
 
 @dataclass(slots=True)
 class ChartContent(Content):
-    """图表占位块的渲染结果。"""
+    """图表占位块的渲染结果。
+
+    当前版本按图片方式写回，因此结构与 ``ImageContent`` 类似。
+    """
 
     image_path: str
 
 
 @dataclass(slots=True)
 class Placeholder:
-    """模板占位块的标准化描述对象。"""
+    """模板占位块的标准化描述对象。
+
+    字段说明：
+        type: 占位块类型，例如 ``text``、``image``、``table``、``chart``。
+        key: 业务侧注册的唯一 key。
+        slide_index: 占位块所在 slide 的 ``0-based`` 索引。
+        shape_id: 原始 shape id，常用于日志与后续操作定位。
+        shape_name: 原始 ``shape.name``。
+        left/top/width/height: 占位区域的几何信息。
+        shape: 原始底层 shape 对象，仅供 SDK 内部写回使用。
+    """
 
     type: str
     key: str
@@ -171,7 +325,16 @@ class Placeholder:
 
 @dataclass(slots=True)
 class RenderResult:
-    """一次模板渲染的结构化返回结果。"""
+    """一次模板渲染的结构化返回结果。
+
+    字段说明：
+        success: 是否渲染成功。
+        output_path: 若调用时传入了输出路径，则为最终落盘路径。
+        output_bytes: 渲染后的 PPT 字节流。
+        rendered_count: 实际完成 shape 级渲染的占位块数量。
+        skipped_count: 预留字段，用于记录未处理数量。
+        warnings: 渲染阶段产生的 warning，例如缺失文本字段。
+    """
 
     success: bool
     output_path: Optional[str] = None
@@ -183,7 +346,15 @@ class RenderResult:
 
 @dataclass(slots=True)
 class ValidationReport:
-    """静态模板校验结果。"""
+    """静态模板校验结果。
+
+    字段说明：
+        success: 是否通过静态校验。
+        placeholder_count: 模板中识别到的合法占位块数量。
+        errors: 阻断型问题列表。
+        warnings: 非阻断型问题列表。
+        unused_renderers: 已注册但未使用的 renderer key。
+    """
 
     success: bool
     placeholder_count: int = 0
@@ -194,19 +365,36 @@ class ValidationReport:
 
 @dataclass(slots=True)
 class TextReplaceResult:
-    """独立文本替换操作的返回结果。"""
+    """独立文本替换操作的返回结果。
+
+    字段说明：
+        replaced_count: 本次命中的字段总数。
+        warnings: 替换过程中产生的 warning，例如缺失字段。
+    """
 
     replaced_count: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
 class BaseRenderer:
-    """自定义 renderer 的基类。"""
+    """自定义 renderer 的基类。
+
+    业务侧通常继承该类并实现 ``render()``，或使用 ``RendererRegistry`` 的函数
+    式注册方式。若希望在校验阶段提前参与类型检查，可声明 ``supported_types``。
+    """
 
     supported_types: set[str] = set()
 
     def render(self, placeholder: Placeholder, context: RenderContext):
-        """根据占位块和上下文生成渲染结果。"""
+        """根据占位块和上下文生成渲染结果。
+
+        参数：
+            placeholder: 当前占位块描述。
+            context: 当前渲染上下文。
+
+        返回：
+            ``TextContent``、``ImageContent``、``TableContent`` 或 ``ChartContent``。
+        """
 
         raise NotImplementedError
 
@@ -220,23 +408,54 @@ class _FunctionRenderer(BaseRenderer):
 
 
 class RendererRegistry:
-    """管理模板占位块 renderer 的注册与查询。"""
+    """管理模板占位块 renderer 的注册与查询。
+
+    它是模板 key 与业务渲染逻辑之间的桥梁，支持类式 renderer、函数式 renderer
+    和装饰器注册。
+
+    示例：
+        ```python
+        registry = RendererRegistry()
+
+        @registry.renderer("title")
+        def render_title(placeholder, context):
+            return TextContent(text="经营分析")
+        ```
+    """
 
     def __init__(self) -> None:
         self._renderers: dict[str, BaseRenderer] = {}
 
     def register(self, key: str, renderer: BaseRenderer) -> None:
-        """注册类式 renderer。"""
+        """注册类式 renderer。
+
+        参数：
+            key: 模板中的占位块 key，例如 ``"title"``。
+            renderer: ``BaseRenderer`` 实例。
+        """
 
         self._renderers[key] = renderer
 
     def register_func(self, key: str, func: Callable) -> None:
-        """注册函数式 renderer。"""
+        """注册函数式 renderer。
+
+        参数：
+            key: 模板中的占位块 key。
+            func: 接收 ``(placeholder, context)`` 并返回内容对象的函数。
+        """
 
         self.register(key, _FunctionRenderer(func))
 
     def renderer(self, key: str):
-        """返回装饰器，用于以声明式方式注册 renderer。"""
+        """返回装饰器，用于以声明式方式注册 renderer。
+
+        示例：
+            ```python
+            @registry.renderer("title")
+            def render_title(placeholder, context):
+                return TextContent(text="经营分析")
+            ```
+        """
 
         def decorator(func: Callable):
             self.register_func(key, func)
@@ -256,7 +475,11 @@ class RendererRegistry:
 
 
 class PptxAdapter:
-    """单文件版内部使用的 Presentation 读写适配层。"""
+    """单文件版内部使用的 Presentation 读写适配层。
+
+    该类不直接面向业务方，但它承载了模板加载、输出保存、shape 定位和内容写回
+    的核心能力，因此单文件里保留了完整实现。
+    """
 
     def load(self, template_path: Optional[str] = None, template_bytes: Optional[bytes] = None) -> Presentation:
         if bool(template_path) == bool(template_bytes):
@@ -450,7 +673,21 @@ def validate_presentation(presentation, registry, options) -> ValidationReport:
 
 
 class TextReplacer:
-    """执行普通文本框和表格单元格中的字段替换。"""
+    """执行普通文本框和表格单元格中的字段替换。
+
+    适合在不走 shape 级 renderer 的场景下，单独对现有 PPT 做字段替换。
+
+    示例：
+        ```python
+        from pptx import Presentation
+
+        prs = Presentation("text_replace_template.pptx")
+        result = TextReplacer().replace_presentation_text(
+            prs,
+            context=RenderContext(data={"project": {"name": "Aurora"}}),
+        )
+        ```
+    """
 
     def __init__(self, pattern: Optional[str] = None):
         self.pattern = pattern
@@ -462,7 +699,20 @@ class TextReplacer:
         rendered_shape_ids: Optional[set[int]] = None,
         pattern: Optional[str] = None,
     ) -> TextReplaceResult:
-        """对整个 Presentation 执行字段替换。"""
+        """对整个 Presentation 执行字段替换。
+
+        参数：
+            presentation: ``python-pptx`` 的 ``Presentation`` 实例。
+            context: 字段取值上下文。
+            rendered_shape_ids: 可选 shape id 集合；这些 shape 会被跳过。
+            pattern: 本次调用临时覆盖的匹配正则。
+
+        返回：
+            ``TextReplaceResult``，包含替换次数与 warning 列表。
+
+        异常：
+            FieldReplaceError: 替换过程发生异常时抛出。
+        """
 
         field_re = re.compile(pattern or self.pattern or r"\{\{([\w\.]+)\}\}")
         rendered_shape_ids = rendered_shape_ids or set()
@@ -514,7 +764,21 @@ CONTENT_TYPE_MAP = {
 
 
 class PptTemplateEngine:
-    """PPT 模板渲染主引擎。"""
+    """PPT 模板渲染主引擎。
+
+    这是单文件版最主要的入口，负责加载模板、解析占位块、调度 renderer、
+    执行文本替换，并输出最终的 PPT 文件或字节流。
+
+    示例：
+        ```python
+        engine = PptTemplateEngine(registry=registry)
+        result = engine.render(
+            template_path="report_template.pptx",
+            output_path="report_output.pptx",
+            context=context,
+        )
+        ```
+    """
 
     def __init__(self, registry, options: Optional[EngineOptions] = None):
         self.registry = registry
@@ -529,7 +793,23 @@ class PptTemplateEngine:
         output_path: Optional[str] = None,
         context: Optional[RenderContext] = None,
     ) -> RenderResult:
-        """执行模板渲染。"""
+        """执行模板渲染。
+
+        参数：
+            template_path: 模板文件路径，与 ``template_bytes`` 二选一。
+            template_bytes: 模板字节流，与 ``template_path`` 二选一。
+            output_path: 可选输出路径；传入后会在返回 bytes 的同时落盘。
+            context: 渲染上下文；为空时使用空上下文。
+
+        返回：
+            ``RenderResult``，包含输出 bytes、渲染计数和 warning。
+
+        异常：
+            PlaceholderFormatError: 模板中存在非法占位块命名。
+            DuplicatePlaceholderError: 重复 key 且策略为 ``error``。
+            RendererNotFoundError: 模板存在未注册 renderer 的占位块。
+            ContentTypeMismatchError: renderer 返回类型与占位块类型不匹配。
+        """
 
         context = context or RenderContext(data={})
         presentation = self.adapter.load(template_path=template_path, template_bytes=template_bytes)
@@ -589,7 +869,15 @@ class PptTemplateEngine:
         template_path: Optional[str] = None,
         template_bytes: Optional[bytes] = None,
     ) -> ValidationReport:
-        """对模板执行静态校验。"""
+        """对模板执行静态校验。
+
+        参数：
+            template_path: 模板文件路径，与 ``template_bytes`` 二选一。
+            template_bytes: 模板字节流，与 ``template_path`` 二选一。
+
+        返回：
+            ``ValidationReport``，用于查看错误、warning 和未使用 renderer。
+        """
 
         presentation = self.adapter.load(template_path=template_path, template_bytes=template_bytes)
         return validate_presentation(presentation, self.registry, self.options)
@@ -600,7 +888,19 @@ def _tag(namespace: str, name: str) -> str:
 
 
 class PptOperations:
-    """封装常见的 PPT 结构与表格操作。"""
+    """封装常见的 PPT 结构与表格操作。
+
+    适合在渲染前后对文档做结构调整，例如插页、删页、按 section 组织页面，
+    或对表格执行删行删列与合并操作。所有公开索引都是 ``0-based``。
+
+    示例：
+        ```python
+        ops = PptOperations.load(template_path="operations_template.pptx")
+        ops.insert_slide(target_index=1, layout_index=6)
+        ops.add_section(name="正文", start_slide_index=1)
+        ops.save_to_path("operations_output.pptx")
+        ```
+    """
 
     def __init__(self, presentation, adapter: Optional[PptxAdapter] = None):
         self.presentation = presentation
@@ -608,13 +908,21 @@ class PptOperations:
 
     @classmethod
     def load(cls, template_path: Optional[str] = None, template_bytes: Optional[bytes] = None):
-        """从路径或字节流加载 PPT 并创建操作对象。"""
+        """从路径或字节流加载 PPT 并创建操作对象。
+
+        参数：
+            template_path: 模板路径，与 ``template_bytes`` 二选一。
+            template_bytes: 模板字节流，与 ``template_path`` 二选一。
+        """
 
         adapter = PptxAdapter()
         return cls(adapter.load(template_path=template_path, template_bytes=template_bytes), adapter=adapter)
 
     def save_to_bytes(self) -> bytes:
-        """将当前 Presentation 保存为内存字节流。"""
+        """将当前 Presentation 保存为内存字节流。
+
+        适合 Web/API 场景直接返回下载内容。
+        """
 
         return self.adapter.save_to_bytes(self.presentation)
 
@@ -624,7 +932,14 @@ class PptOperations:
         self.adapter.save_to_path(self.presentation, output_path)
 
     def delete_slide(self, slide_index: int) -> int:
-        """删除指定索引的 slide。"""
+        """删除指定索引的 slide。
+
+        参数：
+            slide_index: ``0-based`` slide 索引。
+
+        返回：
+            被删除 slide 的内部 ``slide_id``。
+        """
 
         slide_id_el = self._get_slide_id_element(slide_index)
         slide_id = int(slide_id_el.get("id"))
@@ -639,7 +954,15 @@ class PptOperations:
         return slide_id
 
     def insert_slide(self, target_index: int, layout_index: int):
-        """使用模板现有 ``layout_index`` 新建并插入 slide。"""
+        """使用模板现有 ``layout_index`` 新建并插入 slide。
+
+        参数：
+            target_index: 新 slide 的插入位置，使用 ``0-based`` 索引。
+            layout_index: ``presentation.slide_layouts`` 中的 layout 索引。
+
+        返回：
+            新建的 slide 对象。
+        """
 
         if target_index < 0 or target_index > len(self.presentation.slides):
             raise OperationError(f"target_index {target_index} out of range")
@@ -667,7 +990,16 @@ class PptOperations:
         return slide
 
     def add_section(self, name: str, start_slide_index: int) -> None:
-        """在指定 slide 位置开始一个新的 section。"""
+        """在指定 slide 位置开始一个新的 section。
+
+        参数：
+            name: section 名称。
+            start_slide_index: section 起始 slide 的 ``0-based`` 索引。
+
+        说明：
+            若模板当前没有 section，会自动初始化 section 列表。
+            若目标 slide 已经是某个 section 的起始页，则该 section 会被重命名。
+        """
 
         slide_ids = self._slide_ids_in_order()
         if not slide_ids:
@@ -703,7 +1035,14 @@ class PptOperations:
         self._write_sections(groups)
 
     def delete_section(self, section_index: int) -> None:
-        """删除指定 section，但保留其中 slides。"""
+        """删除指定 section，但保留其中 slides。
+
+        参数：
+            section_index: ``0-based`` section 索引。
+
+        说明：
+            被删除 section 中的 slides 会并入相邻 section，不会从文档中删除。
+        """
 
         groups = self._read_sections()
         if not groups:
@@ -722,7 +1061,17 @@ class PptOperations:
         self._write_sections(groups)
 
     def delete_table_row(self, slide_index: int, shape_locator: Union[int, str], row_index: int) -> None:
-        """删除指定表格中的一行。"""
+        """删除指定表格中的一行。
+
+        参数：
+            slide_index: 目标 slide 的 ``0-based`` 索引。
+            shape_locator: 推荐传 ``shape_id``，也支持 ``shape_name``。
+            row_index: 待删除的 ``0-based`` 行索引。
+
+        异常：
+            OperationError: 行越界，或表格已存在合并单元格。
+            ShapeOperationError: 目标 shape 不存在或不是表格。
+        """
 
         table = self._resolve_table(slide_index, shape_locator)
         self._ensure_unmerged_table(table)
@@ -731,7 +1080,13 @@ class PptOperations:
         table._tbl.remove(table._tbl.tr_lst[row_index])
 
     def delete_table_column(self, slide_index: int, shape_locator: Union[int, str], column_index: int) -> None:
-        """删除指定表格中的一列。"""
+        """删除指定表格中的一列。
+
+        参数：
+            slide_index: 目标 slide 的 ``0-based`` 索引。
+            shape_locator: 推荐传 ``shape_id``，也支持 ``shape_name``。
+            column_index: 待删除的 ``0-based`` 列索引。
+        """
 
         table = self._resolve_table(slide_index, shape_locator)
         self._ensure_unmerged_table(table)
@@ -750,7 +1105,19 @@ class PptOperations:
         last_row: int,
         last_col: int,
     ) -> None:
-        """合并指定矩形区域内的表格单元格。"""
+        """合并指定矩形区域内的表格单元格。
+
+        参数：
+            slide_index: 目标 slide 的 ``0-based`` 索引。
+            shape_locator: 推荐传 ``shape_id``，也支持 ``shape_name``。
+            first_row: 合并区域左上角行索引。
+            first_col: 合并区域左上角列索引。
+            last_row: 合并区域右下角行索引。
+            last_col: 合并区域右下角列索引。
+
+        异常：
+            OperationError: 合并区域非法或越界。
+        """
 
         table = self._resolve_table(slide_index, shape_locator)
         self._validate_merge_bounds(table, first_row, first_col, last_row, last_col)
