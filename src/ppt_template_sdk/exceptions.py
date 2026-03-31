@@ -28,3 +28,7 @@ class ShapeOperationError(PptTemplateSdkError):
 
 class FieldReplaceError(PptTemplateSdkError):
     pass
+
+
+class OperationError(PptTemplateSdkError):
+    pass

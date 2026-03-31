@@ -4,6 +4,7 @@ from .exceptions import (
     ContentTypeMismatchError,
     DuplicatePlaceholderError,
     FieldReplaceError,
+    OperationError,
     PlaceholderFormatError,
     PptTemplateSdkError,
     RendererNotFoundError,
@@ -14,8 +15,11 @@ from .models.content import ChartContent, Content, ImageContent, TableContent, T
 from .models.placeholder import Placeholder
 from .models.report import ValidationReport
 from .models.result import RenderResult
+from .models.text import TextReplaceResult
 from .options import EngineOptions
+from .operations import PptOperations
 from .registry import BaseRenderer, RendererRegistry
+from .text_replacer import TextReplacer
 
 __all__ = [
     "BaseRenderer",
@@ -26,9 +30,11 @@ __all__ = [
     "EngineOptions",
     "FieldReplaceError",
     "ImageContent",
+    "OperationError",
     "Placeholder",
     "PlaceholderFormatError",
     "PptTemplateEngine",
+    "PptOperations",
     "PptTemplateSdkError",
     "RenderContext",
     "RenderResult",
@@ -37,6 +43,8 @@ __all__ = [
     "ShapeOperationError",
     "TableContent",
     "TemplateParseError",
+    "TextReplaceResult",
+    "TextReplacer",
     "TextContent",
     "ValidationReport",
 ]

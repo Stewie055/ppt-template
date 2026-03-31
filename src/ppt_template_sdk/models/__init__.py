@@ -2,6 +2,7 @@ from .content import ChartContent, Content, ImageContent, TableContent, TextCont
 from .placeholder import Placeholder
 from .report import ValidationReport
 from .result import RenderResult
+from .text import TextReplaceResult
 
 __all__ = [
     "ChartContent",
@@ -10,6 +11,7 @@ __all__ = [
     "Placeholder",
     "RenderResult",
     "TableContent",
+    "TextReplaceResult",
     "TextContent",
     "ValidationReport",
 ]

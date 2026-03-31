@@ -14,9 +14,11 @@ pip install -e .[dev]
 from ppt_template_sdk import (
     EngineOptions,
     PptTemplateEngine,
+    PptOperations,
     RenderContext,
     RendererRegistry,
     TextContent,
+    TextReplacer,
 )
 
 registry = RendererRegistry()
@@ -39,12 +41,18 @@ result = engine.render(
         extras={"report": type("Report", (), {"title": "Q1"} )()},
     ),
 )
+
+ops = PptOperations.load(template_path="output.pptx")
+ops.insert_slide(target_index=1, layout_index=6)
+ops.save_to_path("output_with_slide.pptx")
 ```
 
 ## 当前能力
 
 - `ph:<type>:<key>` 占位块识别
 - `text` / `image` / `table` / `chart(图片方式)` 渲染
+- `TextReplacer` 公共文本替换模块
+- `PptOperations` 公共操作模块
 - 文本框与表格单元格字段替换
 - `validate()` 静态模板校验
 - 输出为文件或内存 bytes

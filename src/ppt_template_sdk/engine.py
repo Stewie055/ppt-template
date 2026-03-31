@@ -15,6 +15,7 @@ from .models.content import ChartContent, ImageContent, TableContent, TextConten
 from .models.result import RenderResult
 from .options import EngineOptions
 from .parser.template_parser import parse_presentation
+from .text_replacer import TextReplacer
 from .validator import validate_presentation
 
 
@@ -31,6 +32,7 @@ class PptTemplateEngine:
         self.registry = registry
         self.options = options or EngineOptions()
         self.adapter = PptxAdapter()
+        self.text_replacer = TextReplacer(self.options.text_field_pattern)
 
     def render(
         self,
@@ -71,14 +73,13 @@ class PptTemplateEngine:
                 rendered_count += 1
 
         if self.options.enable_text_field_replace:
-            warnings.extend(
-                self.adapter.replace_text_fields(
-                    presentation,
-                    rendered_shape_ids,
-                    lambda path: context.get_value(path),
-                    self.options.text_field_pattern,
-                )
+            replace_result = self.text_replacer.replace_presentation_text(
+                presentation,
+                context=context,
+                rendered_shape_ids=rendered_shape_ids,
+                pattern=self.options.text_field_pattern,
             )
+            warnings.extend(replace_result.warnings)
 
         output_bytes = self.adapter.save_to_bytes(presentation)
         if output_path:

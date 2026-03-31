@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from pptx import Presentation
@@ -14,10 +16,13 @@ from ppt_template_sdk import (
     DuplicatePlaceholderError,
     EngineOptions,
     ImageContent,
+    OperationError,
     PptTemplateEngine,
+    PptOperations,
     RenderContext,
     RendererRegistry,
     TableContent,
+    TextReplacer,
     TextContent,
 )
 from ppt_template_sdk.registry import BaseRenderer
@@ -186,3 +191,89 @@ def test_content_type_mismatch(tmp_path: Path):
 
     with pytest.raises(ContentTypeMismatchError):
         engine.render(template_path=str(path), context=RenderContext(data={}))
+
+
+def test_text_replacer_public_api(tmp_path: Path):
+    template_path = tmp_path / "template.pptx"
+    _build_template(template_path)
+    prs = Presentation(str(template_path))
+    replacer = TextReplacer()
+    result = replacer.replace_presentation_text(
+        prs,
+        context=RenderContext(data={"project": {"name": "Aurora"}, "report_date": "2026-04-01", "owner": {"name": "Bob"}}),
+    )
+
+    texts = [shape.text for shape in prs.slides[0].shapes if getattr(shape, "has_text_frame", False)]
+    assert "项目：Aurora 日期：2026-04-01 缺失：" in texts
+    assert result.replaced_count >= 4
+    assert any("missing text field 'missing.value'" in warning for warning in result.warnings)
+
+
+def test_operations_slide_and_section_flow(tmp_path: Path):
+    prs = Presentation()
+    for idx in range(3):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1)).text = f"slide-{idx}"
+    path = tmp_path / "ops.pptx"
+    prs.save(path)
+
+    ops = PptOperations.load(template_path=str(path))
+    ops.add_section("Content", 1)
+    ops.insert_slide(target_index=1, layout_index=6)
+    ops.delete_slide(3)
+    ops.delete_section(0)
+
+    output = tmp_path / "ops-out.pptx"
+    ops.save_to_path(str(output))
+    rendered = Presentation(str(output))
+    assert len(rendered.slides) == 3
+    slide0_texts = [shape.text for shape in rendered.slides[0].shapes if getattr(shape, "has_text_frame", False)]
+    slide1_texts = [shape.text for shape in rendered.slides[1].shapes if getattr(shape, "has_text_frame", False)]
+    assert slide0_texts == ["slide-0"]
+    assert slide1_texts == []
+
+    with ZipFile(output) as zf:
+        presentation_xml = zf.read("ppt/presentation.xml").decode("utf-8")
+    assert 'name="Content"' in presentation_xml
+    assert "sectionLst" in presentation_xml
+    assert presentation_xml.count("<p:sldId ") == 3
+
+
+def test_operations_table_row_column_and_merge(tmp_path: Path):
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_table(3, 3, Inches(1), Inches(1), Inches(4), Inches(2))
+    shape.name = "ops-table"
+    table = shape.table
+    for row_index in range(3):
+        for col_index in range(3):
+            table.cell(row_index, col_index).text = f"{row_index},{col_index}"
+    path = tmp_path / "table-ops.pptx"
+    prs.save(path)
+
+    ops = PptOperations.load(template_path=str(path))
+    ops.delete_table_row(0, "ops-table", 1)
+    ops.delete_table_column(0, "ops-table", 1)
+    ops.merge_table_cells(0, "ops-table", 0, 0, 1, 1)
+
+    output_bytes = ops.save_to_bytes()
+    rendered = Presentation(BytesIO(output_bytes))
+    shape = rendered.slides[0].shapes[0]
+    table = shape.table
+    assert len(table.rows) == 2
+    assert len(table.columns) == 2
+    assert table.cell(0, 0).is_merge_origin is True
+
+
+def test_row_column_delete_rejects_merged_tables(tmp_path: Path):
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_table(2, 2, Inches(1), Inches(1), Inches(4), Inches(2))
+    shape.name = "merged-table"
+    shape.table.cell(0, 0).merge(shape.table.cell(1, 1))
+    path = tmp_path / "merged.pptx"
+    prs.save(path)
+
+    ops = PptOperations.load(template_path=str(path))
+    with pytest.raises(OperationError):
+        ops.delete_table_row(0, "merged-table", 0)

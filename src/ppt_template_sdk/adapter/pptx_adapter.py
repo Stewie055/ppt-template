@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Union
 
 from pptx import Presentation
 
 from ..exceptions import ShapeOperationError
 from ..models.content import ChartContent, ImageContent, TableContent, TextContent
-from ..parser.template_parser import iter_shapes
 
 
 class PptxAdapter:
@@ -30,6 +29,24 @@ class PptxAdapter:
     @staticmethod
     def save_to_path(presentation, output_path: str) -> None:
         presentation.save(output_path)
+
+    @staticmethod
+    def get_slide(presentation, slide_index: int):
+        if slide_index < 0 or slide_index >= len(presentation.slides):
+            raise ShapeOperationError(f"slide index {slide_index} out of range")
+        return presentation.slides[slide_index]
+
+    @staticmethod
+    def find_shape(slide, shape_locator: Union[int, str]):
+        if isinstance(shape_locator, int):
+            for shape in slide.shapes:
+                if getattr(shape, "shape_id", None) == shape_locator:
+                    return shape
+            raise ShapeOperationError(f"shape id {shape_locator} not found")
+        for shape in slide.shapes:
+            if getattr(shape, "name", None) == shape_locator:
+                return shape
+        raise ShapeOperationError(f"shape '{shape_locator}' not found")
 
     @staticmethod
     def write_content(presentation, placeholder, content) -> None:
@@ -57,36 +74,6 @@ class PptxAdapter:
             PptxAdapter._remove_shape(shape)
             return
         raise ShapeOperationError(f"unsupported content type '{type(content).__name__}'")
-
-    @staticmethod
-    def replace_text_fields(presentation, rendered_shape_ids: set[int], resolver, pattern: str) -> list[str]:
-        import re
-
-        field_re = re.compile(pattern)
-        warnings: list[str] = []
-        for slide in presentation.slides:
-            for shape in iter_shapes(slide.shapes):
-                if getattr(shape, "shape_id", None) in rendered_shape_ids:
-                    continue
-                if getattr(shape, "has_text_frame", False):
-                    shape.text = PptxAdapter._replace_text(shape.text_frame.text, field_re, resolver, warnings)
-                if getattr(shape, "has_table", False):
-                    for row in shape.table.rows:
-                        for cell in row.cells:
-                            cell.text = PptxAdapter._replace_text(cell.text, field_re, resolver, warnings)
-        return warnings
-
-    @staticmethod
-    def _replace_text(text: str, field_re, resolver, warnings: list[str]) -> str:
-        def repl(match):
-            path = match.group(1)
-            value = resolver(path)
-            if value is None:
-                warnings.append(f"missing text field '{path}'")
-                return ""
-            return str(value)
-
-        return field_re.sub(repl, text)
 
     @staticmethod
     def _build_table_grid(content: TableContent) -> tuple[int, int, list[list[str]]]:
