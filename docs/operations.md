@@ -150,3 +150,8 @@ ops.merge_table_cells(
 
 - 文本替换：[`examples/text_replace.py`](../examples/text_replace.py)
 - 操作模块：[`examples/operations_demo.py`](../examples/operations_demo.py)
+
+## 8. 单文件版说明
+
+若你使用的是 [`singlefile/ppt_template_sdk.py`](../singlefile/ppt_template_sdk.py)，
+`TextReplacer` 和 `PptOperations` 的接口与本文说明保持一致，无需修改调用代码。

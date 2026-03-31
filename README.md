@@ -162,6 +162,33 @@ ops.save_to_path("examples/output/operations_output.pptx")
 - [独立文本替换示例](examples/text_replace.py)
 - [操作模块示例](examples/operations_demo.py)
 
+## 单文件版本
+
+仓库额外提供一个真正独立的单文件版本：
+
+- [`singlefile/ppt_template_sdk.py`](singlefile/ppt_template_sdk.py)
+
+适用场景：
+
+- 不想把整个包结构带进业务仓库
+- 希望像 `bottle.py` 一样直接复制一个文件使用
+
+使用方式：
+
+1. 将 `singlefile/ppt_template_sdk.py` 复制到你的项目中
+2. 文件名保持为 `ppt_template_sdk.py`
+3. 安装 `python-pptx`
+4. 继续使用相同导入方式：
+
+```python
+from ppt_template_sdk import PptTemplateEngine, RendererRegistry
+```
+
+说明：
+
+- 单文件版覆盖当前全部公开能力
+- 单文件版用于“复制进业务项目”场景，不建议和当前包版在同一环境中混用
+
 ## 示例素材
 
 `examples/assets/` 包含可直接运行的模板与图片：

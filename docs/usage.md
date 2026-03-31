@@ -156,3 +156,21 @@ report = engine.validate(template_path="examples/assets/report_template.pptx")
 - 渲染主链路：[`examples/render_report.py`](../examples/render_report.py)
 - 文本替换：[`examples/text_replace.py`](../examples/text_replace.py)
 - 操作模块：[`examples/operations_demo.py`](../examples/operations_demo.py)
+
+## 9. 单文件版本
+
+如果你的接入方式更偏向“复制一个文件到项目中”，仓库提供了单文件版：
+
+- [`singlefile/ppt_template_sdk.py`](../singlefile/ppt_template_sdk.py)
+
+使用建议：
+
+1. 将该文件复制到你的业务项目
+2. 文件名保持 `ppt_template_sdk.py`
+3. 安装 `python-pptx`
+4. 继续使用与包版相同的导入方式
+
+说明：
+
+- 单文件版覆盖当前全部公开能力
+- 更适合 vendoring，不建议和包版同时装在同一解释器里混用

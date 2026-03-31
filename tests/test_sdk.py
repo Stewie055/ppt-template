@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+import importlib.util
 from io import BytesIO
 from pathlib import Path
+import sys
 from zipfile import ZipFile
 
 import pytest
@@ -31,6 +33,16 @@ from ppt_template_sdk.registry import BaseRenderer
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9n6n8AAAAASUVORK5CYII="
 )
+
+
+def _load_singlefile_module():
+    module_path = Path(__file__).resolve().parents[1] / "singlefile" / "ppt_template_sdk.py"
+    spec = importlib.util.spec_from_file_location("ppt_template_sdk_single", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _write_png(path: Path) -> None:
@@ -277,3 +289,75 @@ def test_row_column_delete_rejects_merged_tables(tmp_path: Path):
     ops = PptOperations.load(template_path=str(path))
     with pytest.raises(OperationError):
         ops.delete_table_row(0, "merged-table", 0)
+
+
+def test_singlefile_render_text_and_operations(tmp_path: Path):
+    sdk = _load_singlefile_module()
+    template_path = tmp_path / "template.pptx"
+    output_path = tmp_path / "output.pptx"
+    logo_path = tmp_path / "logo.png"
+    chart_path = tmp_path / "chart.png"
+    _write_png(logo_path)
+    _write_png(chart_path)
+    _build_template(template_path)
+
+    registry = sdk.RendererRegistry()
+    registry.register_func("title", lambda placeholder, context: sdk.TextContent(text="Single File"))
+    registry.register_func("logo", lambda placeholder, context: sdk.ImageContent(image_path=str(logo_path)))
+    registry.register_func("sales", lambda placeholder, context: sdk.ChartContent(image_path=str(chart_path)))
+    registry.register_func("risk_table", lambda placeholder, context: sdk.TableContent(headers=["A"], rows=[["B"]]))
+
+    engine = sdk.PptTemplateEngine(registry, sdk.EngineOptions())
+    result = engine.render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=sdk.RenderContext(data={"project": {"name": "Aurora"}, "report_date": "2026-04-01", "owner": {"name": "Bob"}}),
+    )
+    assert result.success is True
+
+    text_template = tmp_path / "text-template.pptx"
+    _build_template(text_template)
+    prs = Presentation(str(text_template))
+    replace_result = sdk.TextReplacer().replace_presentation_text(
+        prs,
+        context=sdk.RenderContext(data={"project": {"name": "Aurora"}, "owner": {"name": "Bob"}, "report_date": "2026-04-01"}),
+    )
+    assert replace_result.replaced_count >= 2
+
+    ops = sdk.PptOperations.load(template_path=str(output_path))
+    ops.insert_slide(target_index=1, layout_index=6)
+    ops.add_section(name="正文", start_slide_index=1)
+    final_bytes = ops.save_to_bytes()
+    assert isinstance(final_bytes, bytes)
+
+
+def test_singlefile_exports_match_expected_surface():
+    sdk = _load_singlefile_module()
+    expected = {
+        "BaseRenderer",
+        "ChartContent",
+        "Content",
+        "ContentTypeMismatchError",
+        "DuplicatePlaceholderError",
+        "EngineOptions",
+        "FieldReplaceError",
+        "ImageContent",
+        "OperationError",
+        "Placeholder",
+        "PlaceholderFormatError",
+        "PptTemplateEngine",
+        "PptOperations",
+        "PptTemplateSdkError",
+        "RenderContext",
+        "RenderResult",
+        "RendererNotFoundError",
+        "RendererRegistry",
+        "ShapeOperationError",
+        "TableContent",
+        "TemplateParseError",
+        "TextReplaceResult",
+        "TextReplacer",
+        "TextContent",
+        "ValidationReport",
+    }
+    assert set(sdk.__all__) == expected
