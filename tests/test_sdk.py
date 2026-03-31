@@ -10,7 +10,10 @@ from zipfile import ZipFile
 
 import pytest
 from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches
+from pptx.util import Pt
 
 from ppt_template_sdk import (
     ChartContent,
@@ -77,6 +80,59 @@ def _build_template(path: Path) -> None:
     native_table.cell(1, 0).text = "项目"
     native_table.cell(1, 1).text = "{{project.name}}"
 
+    prs.save(path)
+
+
+def _build_dual_text_template(path: Path) -> None:
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    first = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+    first.name = "ph:text:title"
+    first.text = "first"
+    second = slide.shapes.add_textbox(Inches(1), Inches(2), Inches(4), Inches(1))
+    second.name = "ph:text:subtitle"
+    second.text = "second"
+    prs.save(path)
+
+
+def _build_styled_text_template(path: Path) -> None:
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+    shape.name = "ph:text:title"
+    paragraph = shape.text_frame.paragraphs[0]
+    paragraph.alignment = PP_ALIGN.CENTER
+    run = paragraph.add_run()
+    run.text = "placeholder"
+    run.font.name = "Arial"
+    run.font.size = Pt(24)
+    run.font.bold = True
+    run.font.italic = True
+    run.font.color.rgb = RGBColor(0x11, 0x22, 0x33)
+    prs.save(path)
+
+
+def _build_native_table_placeholder_template(path: Path) -> None:
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_table(2, 2, Inches(1), Inches(1), Inches(5), Inches(2))
+    shape.name = "ph:table:risk_table"
+    table = shape.table
+    table.columns[0].width = Inches(3)
+    table.columns[1].width = Inches(2)
+    table.rows[0].height = Inches(0.8)
+    table.rows[1].height = Inches(1.2)
+    paragraph = table.cell(0, 0).text_frame.paragraphs[0]
+    paragraph.alignment = PP_ALIGN.CENTER
+    run = paragraph.add_run()
+    run.text = "风险"
+    run.font.name = "Arial"
+    run.font.size = Pt(20)
+    run.font.bold = True
+    run.font.color.rgb = RGBColor(0x44, 0x55, 0x66)
+    table.cell(0, 1).text = "等级"
+    table.cell(1, 0).text = "旧值"
+    table.cell(1, 1).text = "旧值"
     prs.save(path)
 
 
@@ -361,3 +417,110 @@ def test_singlefile_exports_match_expected_surface():
         "ValidationReport",
     }
     assert set(sdk.__all__) == expected
+
+
+def test_singlefile_register_func_supports_bound_kwargs(tmp_path: Path):
+    sdk = _load_singlefile_module()
+    template_path = tmp_path / "bound.pptx"
+    _build_dual_text_template(template_path)
+
+    registry = sdk.RendererRegistry()
+
+    def render_with_prefix(placeholder, context, prefix):
+        return sdk.TextContent(text=f"{prefix}{context.get_value('project.name')}")
+
+    registry.register_func("title", render_with_prefix, prefix="标题：")
+    registry.register_func("subtitle", render_with_prefix, prefix="副标题：")
+
+    result = sdk.PptTemplateEngine(registry).render(
+        template_path=str(template_path),
+        context=sdk.RenderContext(data={"project": {"name": "北极星"}}),
+    )
+
+    rendered = Presentation(BytesIO(result.output_bytes))
+    texts = [shape.text for shape in rendered.slides[0].shapes if getattr(shape, "has_text_frame", False)]
+    assert "标题：北极星" in texts
+    assert "副标题：北极星" in texts
+
+
+def test_singlefile_text_placeholder_preserves_primary_style(tmp_path: Path):
+    sdk = _load_singlefile_module()
+    template_path = tmp_path / "styled-text.pptx"
+    output_path = tmp_path / "styled-text-out.pptx"
+    _build_styled_text_template(template_path)
+
+    registry = sdk.RendererRegistry()
+    registry.register_func("title", lambda placeholder, context: sdk.TextContent(text="新的标题"))
+
+    sdk.PptTemplateEngine(registry).render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=sdk.RenderContext(data={}),
+    )
+
+    rendered = Presentation(str(output_path))
+    shape = next(shape for shape in rendered.slides[0].shapes if getattr(shape, "name", None) == "ph:text:title")
+    paragraph = shape.text_frame.paragraphs[0]
+    run = paragraph.runs[0]
+
+    assert shape.text == "新的标题"
+    assert paragraph.alignment == PP_ALIGN.CENTER
+    assert run.font.name == "Arial"
+    assert run.font.size == Pt(24)
+    assert run.font.bold is True
+    assert run.font.italic is True
+    assert run.font.color.rgb == RGBColor(0x11, 0x22, 0x33)
+
+
+def test_singlefile_native_table_placeholder_preserves_layout_and_style(tmp_path: Path):
+    sdk = _load_singlefile_module()
+    template_path = tmp_path / "native-table.pptx"
+    output_path = tmp_path / "native-table-out.pptx"
+    _build_native_table_placeholder_template(template_path)
+
+    registry = sdk.RendererRegistry()
+    registry.register_func(
+        "risk_table",
+        lambda placeholder, context: sdk.TableContent(headers=["风险", "等级"], rows=[["现金流", "高"]]),
+    )
+
+    sdk.PptTemplateEngine(registry).render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=sdk.RenderContext(data={}),
+    )
+
+    rendered = Presentation(str(output_path))
+    shape = next(shape for shape in rendered.slides[0].shapes if getattr(shape, "name", None) == "ph:table:risk_table")
+    table = shape.table
+    paragraph = table.cell(0, 0).text_frame.paragraphs[0]
+    run = paragraph.runs[0]
+
+    assert len(table.rows) == 2
+    assert len(table.columns) == 2
+    assert table.columns[0].width == Inches(3)
+    assert table.columns[1].width == Inches(2)
+    assert table.rows[0].height == Inches(0.8)
+    assert table.rows[1].height == Inches(1.2)
+    assert table.cell(1, 0).text == "现金流"
+    assert paragraph.alignment == PP_ALIGN.CENTER
+    assert run.font.name == "Arial"
+    assert run.font.size == Pt(20)
+    assert run.font.bold is True
+    assert run.font.color.rgb == RGBColor(0x44, 0x55, 0x66)
+
+
+def test_singlefile_native_table_placeholder_size_mismatch_errors(tmp_path: Path):
+    sdk = _load_singlefile_module()
+    template_path = tmp_path / "native-table-mismatch.pptx"
+    _build_native_table_placeholder_template(template_path)
+
+    registry = sdk.RendererRegistry()
+    registry.register_func(
+        "risk_table",
+        lambda placeholder, context: sdk.TableContent(headers=["风险", "等级", "状态"], rows=[["现金流", "高", "开启"]]),
+    )
+
+    engine = sdk.PptTemplateEngine(registry)
+    with pytest.raises(sdk.ShapeOperationError, match="table placeholder size mismatch"):
+        engine.render(template_path=str(template_path), context=sdk.RenderContext(data={}))

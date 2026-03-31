@@ -39,6 +39,7 @@ print(result.warnings)
 - 支持组内 shape
 - 可通过 `rendered_shape_ids` 跳过已整体渲染的 shape
 - 缺失字段替换为空串，并在 `warnings` 中记录
+- 该模块只负责字段替换，不负责 placeholder 级样式保持
 
 ## 2. PptOperations
 
@@ -139,6 +140,12 @@ ops.merge_table_cells(
 - 已合并表格不支持删行删列
 - merge 区域必须是左上到右下的矩形
 - 找不到 slide / shape / table 时会抛异常
+
+与模板渲染的关系：
+
+- 若你通过 `PptTemplateEngine` 渲染 `text` placeholder，SDK 会保留原文本框格式，并继承原 placeholder 首段首 run 的主样式。
+- 若 `table` placeholder 本身是原生表格，SDK 会原位写回单元格文本，保留列宽、行高和单元格样式。
+- 原生表格 placeholder 与 `TableContent` 尺寸不一致时会直接报错，不会自动增删行列。
 
 ## 6. 异常建议
 

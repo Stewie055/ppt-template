@@ -77,6 +77,10 @@ def render_title(placeholder, context):
     report = context.extras["report"]
     return TextContent(text=report.title)
 
+@registry.renderer("subtitle", prefix="副标题：")
+def render_subtitle(placeholder, context, prefix):
+    return TextContent(text=f"{prefix}{context.get_value('project.name', '未命名项目')}")
+
 @registry.renderer("risk_table")
 def render_risk_table(placeholder, context):
     report = context.extras["report"]
@@ -131,6 +135,22 @@ result = TextReplacer().replace_presentation_text(
 prs.save("examples/output/text_replaced.pptx")
 ```
 
+### `RendererRegistry`
+
+- `register(key, renderer, **bound_kwargs)`
+- `register_func(key, func, **bound_kwargs)`
+- `renderer(key, **bound_kwargs)`
+
+同一个函数可以注册到不同 key，并在注册时绑定参数区分行为：
+
+```python
+def render_label(placeholder, context, prefix):
+    return TextContent(text=f"{prefix}{context.get_value('project.name')}")
+
+registry.register_func("title", render_label, prefix="标题：")
+registry.register_func("subtitle", render_label, prefix="副标题：")
+```
+
 ### `PptOperations`
 
 适合渲染后或独立脚本中做结构调整：
@@ -149,6 +169,9 @@ ops.save_to_path("examples/output/operations_output.pptx")
 
 - `duplicate_key_policy` 默认是 `broadcast`
 - 文本缺失字段会替换为空串，并记录 warning
+- `text` placeholder 会保留原文本框格式，并继承原 placeholder 首段首 run 的主样式
+- 原生 `table` placeholder 会原位写回，保留列宽、行高和单元格样式
+- 原生 `table` placeholder 与返回表格尺寸不一致时会直接报错
 - `slide_index`、`section_index`、表格行列索引全部是 `0-based`
 - `shape_locator` 优先建议传 `shape_id`，也支持 `shape_name`
 - 已合并表格不支持删行删列

@@ -56,6 +56,16 @@ def render_title(placeholder, context):
     return TextContent(text=context.get_value("project.name", "未命名项目"))
 ```
 
+同一个函数可以按不同 key 重复注册，并在注册时绑定固定参数：
+
+```python
+def render_label(placeholder, context, prefix):
+    return TextContent(text=f"{prefix}{context.get_value('project.name')}")
+
+registry.register_func("title", render_label, prefix="标题：")
+registry.register_func("subtitle", render_label, prefix="副标题：")
+```
+
 ### 类式
 
 ```python
@@ -64,7 +74,7 @@ from ppt_template_sdk import BaseRenderer, TableContent
 class RiskTableRenderer(BaseRenderer):
     supported_types = {"table"}
 
-    def render(self, placeholder, context):
+    def render(self, placeholder, context, **kwargs):
         report = context.extras["report"]
         return TableContent(
             headers=["风险", "等级"],
@@ -148,6 +158,9 @@ report = engine.validate(template_path="examples/assets/report_template.pptx")
 
 - 业务系统负责准备模板、业务数据、图片、表格数据
 - SDK 只负责解析模板、调度 renderer、写回 PPT
+- `text` placeholder 会保留原文本框格式，并继承原 placeholder 首段首 run 的主样式
+- 原生 `table` placeholder 会原位写回，保留列宽、行高和单元格样式
+- 原生 `table` placeholder 与 `TableContent` 尺寸不一致时会直接报错
 - 若渲染后还需要结构调整，使用 `PptOperations`
 - 若只是做字段替换，不必走完整 `PptTemplateEngine`，可直接用 `TextReplacer`
 

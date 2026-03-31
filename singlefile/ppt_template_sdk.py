@@ -385,12 +385,13 @@ class BaseRenderer:
 
     supported_types: set[str] = set()
 
-    def render(self, placeholder: Placeholder, context: RenderContext):
+    def render(self, placeholder: Placeholder, context: RenderContext, **kwargs):
         """根据占位块和上下文生成渲染结果。
 
         参数：
             placeholder: 当前占位块描述。
             context: 当前渲染上下文。
+            **kwargs: 注册 renderer 时绑定的固定参数。
 
         返回：
             ``TextContent``、``ImageContent``、``TableContent`` 或 ``ChartContent``。
@@ -400,11 +401,24 @@ class BaseRenderer:
 
 
 class _FunctionRenderer(BaseRenderer):
-    def __init__(self, func: Callable):
+    def __init__(self, func: Callable, bound_kwargs: Optional[dict[str, Any]] = None):
         self._func = func
+        self._bound_kwargs = bound_kwargs or {}
 
-    def render(self, placeholder: Placeholder, context: RenderContext):
-        return self._func(placeholder, context)
+    def render(self, placeholder: Placeholder, context: RenderContext, **kwargs):
+        merged_kwargs = {**self._bound_kwargs, **kwargs}
+        return self._func(placeholder, context, **merged_kwargs)
+
+
+class _BoundRenderer(BaseRenderer):
+    def __init__(self, renderer: BaseRenderer, bound_kwargs: dict[str, Any]):
+        self._renderer = renderer
+        self._bound_kwargs = bound_kwargs
+        self.supported_types = getattr(renderer, "supported_types", set())
+
+    def render(self, placeholder: Placeholder, context: RenderContext, **kwargs):
+        merged_kwargs = {**self._bound_kwargs, **kwargs}
+        return self._renderer.render(placeholder, context, **merged_kwargs)
 
 
 class RendererRegistry:
@@ -426,39 +440,41 @@ class RendererRegistry:
     def __init__(self) -> None:
         self._renderers: dict[str, BaseRenderer] = {}
 
-    def register(self, key: str, renderer: BaseRenderer) -> None:
+    def register(self, key: str, renderer: BaseRenderer, **bound_kwargs: Any) -> None:
         """注册类式 renderer。
 
         参数：
             key: 模板中的占位块 key，例如 ``"title"``。
             renderer: ``BaseRenderer`` 实例。
+            **bound_kwargs: 注册时绑定的固定参数，可用于同一个 renderer 适配不同 key。
         """
 
-        self._renderers[key] = renderer
+        self._renderers[key] = _BoundRenderer(renderer, bound_kwargs) if bound_kwargs else renderer
 
-    def register_func(self, key: str, func: Callable) -> None:
+    def register_func(self, key: str, func: Callable, **bound_kwargs: Any) -> None:
         """注册函数式 renderer。
 
         参数：
             key: 模板中的占位块 key。
             func: 接收 ``(placeholder, context)`` 并返回内容对象的函数。
+            **bound_kwargs: 注册时绑定的固定参数，会在调用时传给函数。
         """
 
-        self.register(key, _FunctionRenderer(func))
+        self.register(key, _FunctionRenderer(func, bound_kwargs))
 
-    def renderer(self, key: str):
+    def renderer(self, key: str, **bound_kwargs: Any):
         """返回装饰器，用于以声明式方式注册 renderer。
 
         示例：
             ```python
-            @registry.renderer("title")
-            def render_title(placeholder, context):
-                return TextContent(text="经营分析")
+            @registry.renderer("title", prefix="主标题")
+            def render_title(placeholder, context, prefix):
+                return TextContent(text=f"{prefix}: 经营分析")
             ```
         """
 
         def decorator(func: Callable):
-            self.register_func(key, func)
+            self.register_func(key, func, **bound_kwargs)
             return func
 
         return decorator
@@ -527,14 +543,15 @@ class PptxAdapter:
         if isinstance(content, TextContent):
             if not getattr(shape, "has_text_frame", False):
                 raise ShapeOperationError(f"shape '{placeholder.shape_name}' cannot accept text content")
-            shape.text = content.text
+            PptxAdapter._set_text_frame_text_preserving_style(shape.text_frame, content.text)
             return
         if isinstance(content, (ImageContent, ChartContent)):
             slide.shapes.add_picture(content.image_path, placeholder.left, placeholder.top, placeholder.width, placeholder.height)
             PptxAdapter._remove_shape(shape)
             return
         if isinstance(content, TableContent):
-            if getattr(shape, "has_table", False) and PptxAdapter._rewrite_table(shape.table, content):
+            if getattr(shape, "has_table", False):
+                PptxAdapter._rewrite_table(shape.table, content)
                 return
             rows, cols, grid = PptxAdapter._build_table_grid(content)
             table_shape = slide.shapes.add_table(rows, cols, placeholder.left, placeholder.top, placeholder.width, placeholder.height)
@@ -561,10 +578,13 @@ class PptxAdapter:
     def _rewrite_table(table, content: TableContent) -> bool:
         rows, cols, grid = PptxAdapter._build_table_grid(content)
         if len(table.rows) != rows or len(table.columns) != cols:
-            return False
+            raise ShapeOperationError(
+                f"table placeholder size mismatch: template is {len(table.rows)}x{len(table.columns)}, "
+                f"content is {rows}x{cols}"
+            )
         for row_index, row_values in enumerate(grid):
             for col_index, value in enumerate(row_values):
-                table.cell(row_index, col_index).text = value
+                PptxAdapter._set_text_frame_text_preserving_style(table.cell(row_index, col_index).text_frame, value)
         return True
 
     @staticmethod
@@ -573,6 +593,70 @@ class PptxAdapter:
         if parent is None:
             raise ShapeOperationError("unable to remove placeholder shape after overlay insertion")
         parent.remove(shape.element)
+
+    @staticmethod
+    def _capture_text_style(text_frame) -> dict[str, Any]:
+        paragraph = text_frame.paragraphs[0] if text_frame.paragraphs else None
+        run = paragraph.runs[0] if paragraph and paragraph.runs else None
+        style = {
+            "alignment": getattr(paragraph, "alignment", None),
+            "level": getattr(paragraph, "level", None),
+            "line_spacing": getattr(paragraph, "line_spacing", None),
+            "space_before": getattr(paragraph, "space_before", None),
+            "space_after": getattr(paragraph, "space_after", None),
+            "font_name": None,
+            "font_size": None,
+            "font_bold": None,
+            "font_italic": None,
+            "font_underline": None,
+            "font_rgb": None,
+        }
+        if run is not None:
+            font = run.font
+            style["font_name"] = font.name
+            style["font_size"] = font.size
+            style["font_bold"] = font.bold
+            style["font_italic"] = font.italic
+            style["font_underline"] = font.underline
+            try:
+                style["font_rgb"] = font.color.rgb
+            except Exception:
+                style["font_rgb"] = None
+        return style
+
+    @staticmethod
+    def _set_text_frame_text_preserving_style(text_frame, text: str) -> None:
+        style = PptxAdapter._capture_text_style(text_frame)
+        text_frame.clear()
+        paragraph = text_frame.paragraphs[0]
+        if style["alignment"] is not None:
+            paragraph.alignment = style["alignment"]
+        if style["level"] is not None:
+            paragraph.level = style["level"]
+        if style["line_spacing"] is not None:
+            paragraph.line_spacing = style["line_spacing"]
+        if style["space_before"] is not None:
+            paragraph.space_before = style["space_before"]
+        if style["space_after"] is not None:
+            paragraph.space_after = style["space_after"]
+        run = paragraph.add_run()
+        run.text = text
+        font = run.font
+        if style["font_name"] is not None:
+            font.name = style["font_name"]
+        if style["font_size"] is not None:
+            font.size = style["font_size"]
+        if style["font_bold"] is not None:
+            font.bold = style["font_bold"]
+        if style["font_italic"] is not None:
+            font.italic = style["font_italic"]
+        if style["font_underline"] is not None:
+            font.underline = style["font_underline"]
+        if style["font_rgb"] is not None:
+            try:
+                font.color.rgb = style["font_rgb"]
+            except Exception:
+                pass
 
 
 @dataclass(slots=True)
