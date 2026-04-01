@@ -31,7 +31,10 @@ from ppt_template_sdk import (
     PptOperations,
     RenderContext,
     RendererRegistry,
+    TableCellValue,
+    TableCellsContent,
     TableContent,
+    TextStyle,
     TextReplacer,
     TextContent,
 )
@@ -231,6 +234,21 @@ def test_validate_reports_static_issues(tmp_path: Path):
     assert report.unused_renderers == ["unused"]
 
 
+def test_validate_missing_renderer_can_be_warning(tmp_path: Path):
+    template_path = tmp_path / "template.pptx"
+    _build_template(template_path)
+    registry = RendererRegistry()
+    registry.register_func("unused", lambda placeholder, context: TextContent(text="x"))
+
+    engine = PptTemplateEngine(registry, EngineOptions(missing_renderer_policy="warn"))
+    report = engine.validate(template_path=str(template_path))
+
+    assert report.success is True
+    assert report.errors == []
+    assert any("missing renderer" in warning for warning in report.warnings)
+    assert report.unused_renderers == ["unused"]
+
+
 def test_duplicate_key_error_policy(tmp_path: Path):
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[6])
@@ -263,6 +281,42 @@ def test_content_type_mismatch(tmp_path: Path):
 
     with pytest.raises(ContentTypeMismatchError):
         engine.render(template_path=str(path), context=RenderContext(data={}))
+
+
+def test_missing_renderer_warn_policy_skips_placeholder(tmp_path: Path):
+    template_path = tmp_path / "template.pptx"
+    output_path = tmp_path / "output.pptx"
+    logo_path = tmp_path / "logo.png"
+    chart_path = tmp_path / "chart.png"
+    _write_png(logo_path)
+    _write_png(chart_path)
+    _build_template(template_path)
+
+    registry = RendererRegistry()
+    registry.register_func("title", lambda placeholder, context: TextContent(text="已处理标题"))
+    registry.register_func("logo", lambda placeholder, context: ImageContent(image_path=str(logo_path)))
+    registry.register_func("sales", lambda placeholder, context: ChartContent(image_path=str(chart_path)))
+
+    engine = PptTemplateEngine(registry, EngineOptions(missing_renderer_policy="warn"))
+    result = engine.render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=RenderContext(
+            data={"project": {"name": "北极星"}, "report_date": "2026-03-31", "owner": {"name": "Alice"}}
+        ),
+    )
+
+    assert result.success is True
+    assert result.rendered_count == 3
+    assert result.skipped_count == 1
+    assert any("missing renderer for placeholder key 'risk_table'" in warning for warning in result.warnings)
+
+    rendered = Presentation(str(output_path))
+    slide = rendered.slides[0]
+    title_shape = next(shape for shape in slide.shapes if getattr(shape, "name", None) == "ph:text:title")
+    skipped_table_shape = next(shape for shape in slide.shapes if getattr(shape, "name", None) == "ph:table:risk_table")
+    assert title_shape.text == "已处理标题"
+    assert skipped_table_shape.text == "table"
 
 
 def test_text_replacer_public_api(tmp_path: Path):
@@ -413,9 +467,11 @@ def test_singlefile_exports_match_expected_surface():
         "RendererNotFoundError",
         "RendererRegistry",
         "ShapeOperationError",
+        "TableCellValue",
         "TableCellsContent",
         "TableContent",
         "TemplateParseError",
+        "TextStyle",
         "TextReplaceResult",
         "TextReplacer",
         "TextContent",
@@ -612,3 +668,72 @@ def test_singlefile_patch_table_cells_rejects_out_of_range_coordinates(tmp_path:
     ops = sdk.PptOperations.load(template_path=str(template_path))
     with pytest.raises(sdk.ShapeOperationError, match="out of range"):
         ops.patch_table_cells(0, "ph:table:risk_table", {(9, 9): "bad"})
+
+
+def test_table_content_can_override_cell_font_style(tmp_path: Path):
+    template_path = tmp_path / "styled-table.pptx"
+    output_path = tmp_path / "styled-table-out.pptx"
+    _build_native_table_placeholder_template(template_path)
+
+    registry = RendererRegistry()
+    registry.register_func(
+        "risk_table",
+        lambda placeholder, context: TableContent(
+            headers=["风险", "等级"],
+            rows=[
+                [
+                    "现金流",
+                    TableCellValue(text="高", style=TextStyle(color_rgb="FF0000", bold=True)),
+                ]
+            ],
+        ),
+    )
+
+    PptTemplateEngine(registry).render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=RenderContext(data={}),
+    )
+
+    rendered = Presentation(str(output_path))
+    shape = next(shape for shape in rendered.slides[0].shapes if getattr(shape, "name", None) == "ph:table:risk_table")
+    target_run = shape.table.cell(1, 1).text_frame.paragraphs[0].runs[0]
+
+    assert shape.table.cell(1, 1).text == "高"
+    assert target_run.font.bold is True
+    assert target_run.font.color.rgb == RGBColor(0xFF, 0x00, 0x00)
+    assert target_run.font.name is None
+
+
+def test_table_cells_content_can_override_partial_cell_font_style(tmp_path: Path):
+    template_path = tmp_path / "partial-styled-table.pptx"
+    output_path = tmp_path / "partial-styled-table-out.pptx"
+    _build_native_table_placeholder_template(template_path)
+
+    registry = RendererRegistry()
+    registry.register_func(
+        "risk_table",
+        lambda placeholder, context: TableCellsContent(
+            cells={
+                (1, 1): TableCellValue(
+                    text="中",
+                    style=TextStyle(color_rgb="00AA00", italic=True),
+                )
+            }
+        ),
+    )
+
+    PptTemplateEngine(registry).render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=RenderContext(data={}),
+    )
+
+    rendered = Presentation(str(output_path))
+    shape = next(shape for shape in rendered.slides[0].shapes if getattr(shape, "name", None) == "ph:table:risk_table")
+    target_run = shape.table.cell(1, 1).text_frame.paragraphs[0].runs[0]
+
+    assert shape.table.cell(1, 0).text == "旧值"
+    assert shape.table.cell(1, 1).text == "中"
+    assert target_run.font.italic is True
+    assert target_run.font.color.rgb == RGBColor(0x00, 0xAA, 0x00)

@@ -115,6 +115,7 @@ from typing import Any, Callable, Iterable, Optional, Union
 
 from lxml import etree
 from pptx import Presentation
+from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 
@@ -280,6 +281,7 @@ class EngineOptions:
 
     Args:
         duplicate_key_policy: 重复占位块 key 的处理策略，支持 `error` 和 `broadcast`。
+        missing_renderer_policy: 缺少 renderer 时的处理策略，支持 `error` 和 `warn`。
         enable_text_field_replace: 是否启用普通文本与表格单元格字段替换。
         text_field_pattern: 文本字段匹配正则，默认支持 `{{path.to.value}}`。
         text_field_replace_mode: 文本替换模式，当前版本仅支持 `plain`。
@@ -287,6 +289,7 @@ class EngineOptions:
     """
 
     duplicate_key_policy: str = "broadcast"
+    missing_renderer_policy: str = "error"
     enable_text_field_replace: bool = True
     text_field_pattern: str = r"\{\{([\w\.]+)\}\}"
     text_field_replace_mode: str = "plain"
@@ -338,8 +341,8 @@ class TableContent(Content):
     """整表替换用的表格渲染结果。
 
     Args:
-        headers: 表头行；为空时表示只有数据行。
-        rows: 二维数组，每个子列表代表一行。
+        headers: 表头行；为空时表示只有数据行。元素可为字符串或 `TableCellValue`。
+        rows: 二维数组，每个子列表代表一行。元素可为字符串或 `TableCellValue`。
 
     Example:
         ```python
@@ -350,8 +353,47 @@ class TableContent(Content):
         ```
     """
 
-    headers: list[str]
-    rows: list[list[str]]
+    headers: list[Any]
+    rows: list[list[Any]]
+
+
+@dataclass
+class TextStyle:
+    """文本样式覆盖对象。
+
+    Args:
+        color_rgb: 6 位 RGB 十六进制字符串，例如 `FF0000`。
+        font_name: 字体名称。
+        font_size: 字号，单位与 `python-pptx` 的 `font.size` 一致。
+        bold: 是否加粗。
+        italic: 是否斜体。
+        underline: 是否下划线。
+    """
+
+    color_rgb: Optional[str] = None
+    font_name: Optional[str] = None
+    font_size: Optional[Any] = None
+    bold: Optional[bool] = None
+    italic: Optional[bool] = None
+    underline: Optional[bool] = None
+
+
+@dataclass
+class TableCellValue:
+    """表格单元格值对象。
+
+    Args:
+        text: 需要写入 cell 的文本。
+        style: 可选字体样式覆盖；未传时沿用模板 cell 原样式。
+
+    Example:
+        ```python
+        TableCellValue(text="高", style=TextStyle(color_rgb="FF0000", bold=True))
+        ```
+    """
+
+    text: str
+    style: Optional[TextStyle] = None
 
 
 @dataclass
@@ -361,8 +403,8 @@ class TableCellsContent(Content):
     该类型只适用于原生表格 placeholder，不适用于文本框型 table 区域。
 
     Args:
-        cells: 需要更新的 cell 文本映射。key 为 `(row, col)` 的 `0-based`
-            绝对坐标，value 为要写入的文本。空字符串表示清空该 cell。
+        cells: 需要更新的 cell 映射。key 为 `(row, col)` 的 `0-based`
+            绝对坐标，value 可为字符串或 `TableCellValue`。空字符串表示清空该 cell。
 
     Example:
         ```python
@@ -370,7 +412,7 @@ class TableCellsContent(Content):
         ```
     """
 
-    cells: dict[tuple[int, int], str]
+    cells: dict[tuple[int, int], Any]
 
 
 @dataclass
@@ -732,12 +774,12 @@ class PptxAdapter:
         raise ShapeOperationError(f"unsupported content type '{type(content).__name__}'")
 
     @staticmethod
-    def _build_table_grid(content: TableContent) -> tuple[int, int, list[list[str]]]:
-        grid: list[list[str]] = []
+    def _build_table_grid(content: TableContent) -> tuple[int, int, list[list[Any]]]:
+        grid: list[list[Any]] = []
         if content.headers:
-            grid.append([str(value) for value in content.headers])
+            grid.append(list(content.headers))
         for row in content.rows:
-            grid.append([str(value) for value in row])
+            grid.append(list(row))
         cols = max((len(row) for row in grid), default=1)
         normalized = [row + [""] * (cols - len(row)) for row in grid] or [[""]]
         return len(normalized), cols, normalized
@@ -752,11 +794,14 @@ class PptxAdapter:
             )
         for row_index, row_values in enumerate(grid):
             for col_index, value in enumerate(row_values):
-                PptxAdapter._set_text_frame_text_preserving_style(table.cell(row_index, col_index).text_frame, value)
+                text, style_override = PptxAdapter._normalize_table_cell_value(value)
+                PptxAdapter._set_text_frame_text_preserving_style(
+                    table.cell(row_index, col_index).text_frame, text, style_override
+                )
         return True
 
     @staticmethod
-    def _patch_table_cells(table, cells: dict[tuple[int, int], str]) -> None:
+    def _patch_table_cells(table, cells: dict[tuple[int, int], Any]) -> None:
         max_rows = len(table.rows)
         max_cols = len(table.columns)
         for coordinates, value in cells.items():
@@ -769,7 +814,20 @@ class PptxAdapter:
                 raise ShapeOperationError(
                     f"table cell coordinate ({row_index}, {col_index}) out of range for {max_rows}x{max_cols} table"
                 )
-            PptxAdapter._set_text_frame_text_preserving_style(table.cell(row_index, col_index).text_frame, str(value))
+            text, style_override = PptxAdapter._normalize_table_cell_value(value)
+            PptxAdapter._set_text_frame_text_preserving_style(
+                table.cell(row_index, col_index).text_frame, text, style_override
+            )
+
+    @staticmethod
+    def _normalize_table_cell_value(value: Any) -> tuple[str, Optional[TextStyle]]:
+        if isinstance(value, TableCellValue):
+            return str(value.text), value.style
+        if isinstance(value, str):
+            return value, None
+        raise ShapeOperationError(
+            f"table cell value must be str or TableCellValue, got '{type(value).__name__}'"
+        )
 
     @staticmethod
     def _remove_shape(shape) -> None:
@@ -809,7 +867,11 @@ class PptxAdapter:
         return style
 
     @staticmethod
-    def _set_text_frame_text_preserving_style(text_frame, text: str) -> None:
+    def _set_text_frame_text_preserving_style(
+        text_frame,
+        text: str,
+        style_override: Optional[TextStyle] = None,
+    ) -> None:
         style = PptxAdapter._capture_text_style(text_frame)
         text_frame.clear()
         paragraph = text_frame.paragraphs[0]
@@ -841,6 +903,25 @@ class PptxAdapter:
                 font.color.rgb = style["font_rgb"]
             except Exception:
                 pass
+        if style_override is not None:
+            PptxAdapter._apply_text_style_override(font, style_override)
+
+    @staticmethod
+    def _apply_text_style_override(font, style: TextStyle) -> None:
+        if style.font_name is not None:
+            font.name = style.font_name
+        if style.font_size is not None:
+            font.size = style.font_size
+        if style.bold is not None:
+            font.bold = style.bold
+        if style.italic is not None:
+            font.italic = style.italic
+        if style.underline is not None:
+            font.underline = style.underline
+        if style.color_rgb is not None:
+            if not re.fullmatch(r"[0-9A-Fa-f]{6}", style.color_rgb):
+                raise ShapeOperationError("TextStyle.color_rgb must be a 6-digit RGB hex string")
+            font.color.rgb = RGBColor.from_string(style.color_rgb.upper())
 
 
 @dataclass
@@ -918,9 +999,11 @@ def validate_presentation(presentation, registry, options) -> ValidationReport:
     for placeholder in parsed.placeholders:
         renderer = registry.get(placeholder.key)
         if renderer is None:
-            errors.append(
-                f"missing renderer for placeholder '{placeholder.shape_name}' on slide {placeholder.slide_index + 1}"
-            )
+            message = f"missing renderer for placeholder '{placeholder.shape_name}' on slide {placeholder.slide_index + 1}"
+            if options.missing_renderer_policy == "warn":
+                warnings.append(message)
+            else:
+                errors.append(message)
             continue
         used_keys.add(placeholder.key)
         supported_types = getattr(renderer, "supported_types", set()) or set()
@@ -1102,7 +1185,7 @@ class PptTemplateEngine:
         Raises:
             PlaceholderFormatError: 模板中存在非法占位块命名。
             DuplicatePlaceholderError: 重复 key 且策略为 `error`。
-            RendererNotFoundError: 模板存在未注册 renderer 的占位块。
+            RendererNotFoundError: 模板存在未注册 renderer 的占位块，且策略为 `error`。
             ContentTypeMismatchError: renderer 返回类型与占位块类型不匹配。
 
         Example:
@@ -1127,6 +1210,7 @@ class PptTemplateEngine:
 
         rendered_shape_ids: set[int] = set()
         rendered_count = 0
+        skipped_count = 0
         warnings: list[str] = []
 
         for key, placeholders in placeholder_groups.items():
@@ -1134,6 +1218,10 @@ class PptTemplateEngine:
                 raise DuplicatePlaceholderError(f"duplicate placeholder key '{key}' appears {len(placeholders)} times")
             renderer = self.registry.get(key)
             if renderer is None:
+                if self.options.missing_renderer_policy == "warn":
+                    warnings.append(f"missing renderer for placeholder key '{key}'")
+                    skipped_count += len(placeholders)
+                    continue
                 raise RendererNotFoundError(f"missing renderer for placeholder key '{key}'")
             content = renderer.render(placeholders[0], context)
             expected_types = CONTENT_TYPE_MAP[placeholders[0].type]
@@ -1165,7 +1253,7 @@ class PptTemplateEngine:
             output_path=output_path,
             output_bytes=output_bytes,
             rendered_count=rendered_count,
-            skipped_count=0,
+            skipped_count=skipped_count,
             warnings=warnings,
         )
 
@@ -1616,11 +1704,13 @@ __all__ = [
     "RendererNotFoundError",
     "RendererRegistry",
     "ShapeOperationError",
+    "TableCellValue",
     "TableContent",
     "TableCellsContent",
     "TemplateParseError",
     "TextReplaceResult",
     "TextReplacer",
     "TextContent",
+    "TextStyle",
     "ValidationReport",
 ]
