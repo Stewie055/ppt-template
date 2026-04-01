@@ -364,6 +364,68 @@ def test_operations_slide_and_section_flow(tmp_path: Path):
     assert presentation_xml.count("<p:sldId ") == 3
 
 
+def test_engine_render_can_apply_operations_builder_delete_slide(tmp_path: Path):
+    prs = Presentation()
+    for idx in range(3):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1)).text = f"slide-{idx}"
+    template_path = tmp_path / "engine-ops-delete.pptx"
+    output_path = tmp_path / "engine-ops-delete-out.pptx"
+    prs.save(template_path)
+
+    def build_ops(ops, context):
+        if context.extras["mode"] == "summary":
+            ops.delete_slide(1)
+
+    engine = PptTemplateEngine(RendererRegistry())
+    result = engine.render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=RenderContext(data={}, extras={"mode": "summary"}),
+        operations_builder=build_ops,
+    )
+
+    assert result.success is True
+    rendered = Presentation(str(output_path))
+    assert len(rendered.slides) == 2
+    texts = [
+        shape.text
+        for slide in rendered.slides
+        for shape in slide.shapes
+        if getattr(shape, "has_text_frame", False)
+    ]
+    assert texts == ["slide-0", "slide-2"]
+
+
+def test_engine_render_can_apply_operations_builder_insert_slide(tmp_path: Path):
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1)).text = "slide-0"
+    template_path = tmp_path / "engine-ops-insert.pptx"
+    output_path = tmp_path / "engine-ops-insert-out.pptx"
+    prs.save(template_path)
+
+    def build_ops(ops, context):
+        if context.extras["need_extra"]:
+            ops.insert_slide(target_index=1, layout_index=6)
+
+    engine = PptTemplateEngine(RendererRegistry())
+    result = engine.render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=RenderContext(data={}, extras={"need_extra": True}),
+        operations_builder=build_ops,
+    )
+
+    assert result.success is True
+    rendered = Presentation(str(output_path))
+    assert len(rendered.slides) == 2
+    slide0_texts = [shape.text for shape in rendered.slides[0].shapes if getattr(shape, "has_text_frame", False)]
+    slide1_texts = [shape.text for shape in rendered.slides[1].shapes if getattr(shape, "has_text_frame", False)]
+    assert slide0_texts == ["slide-0"]
+    assert slide1_texts == []
+
+
 def test_operations_table_row_column_and_merge(tmp_path: Path):
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[6])

@@ -1197,6 +1197,7 @@ class PptTemplateEngine:
         template_bytes: Optional[bytes] = None,
         output_path: Optional[str] = None,
         context: Optional[RenderContext] = None,
+        operations_builder: Optional[Callable[[Any, RenderContext], None]] = None,
     ) -> RenderResult:
         """执行模板渲染。
 
@@ -1216,6 +1217,9 @@ class PptTemplateEngine:
             template_bytes: 模板字节流，与 `template_path` 二选一。
             output_path: 可选输出路径；传入后会在返回 bytes 的同时落盘。
             context: 渲染上下文；为空时使用空上下文。
+            operations_builder: 可选后处理回调。回调会在渲染和文本替换完成后
+                收到 `PptOperations` 与 `RenderContext`，用于根据外部参数决定删页、
+                插页等结构操作。
 
         Returns:
             `RenderResult`，包含输出 bytes、渲染计数和 warning。
@@ -1281,6 +1285,10 @@ class PptTemplateEngine:
                 pattern=self.options.text_field_pattern,
             )
             warnings.extend(replace_result.warnings)
+
+        if operations_builder is not None:
+            operations = PptOperations(presentation, adapter=self.adapter)
+            operations_builder(operations, context)
 
         output_bytes = self.adapter.save_to_bytes(presentation)
         if output_path:
