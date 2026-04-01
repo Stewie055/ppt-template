@@ -1,14 +1,53 @@
 """单文件版 `ppt_template_sdk`。
 
 这个文件是 PPT 模板渲染 SDK 的完整单文件发行版，适合直接复制到业务项目中维护。
-SDK 负责解析 `.pptx` 模板、识别 `ph:<type>:<key>` 占位块、调度 renderer、写回内容、
-执行文本字段替换，以及提供常见的 slide、section 和表格操作。
+如果你是第一次接触这个库，先记住这 5 个概念：
+
+1. template:
+    一个普通 `.pptx` 文件。
+2. placeholder:
+    你在模板里选中某个 shape，把它的 `shape.name` 命名成 `ph:<type>:<key>`，
+    这个 shape 就成为一个可渲染占位块。
+3. type:
+    placeholder 的内容类型，决定 renderer 应该返回什么内容对象。
+4. key:
+    placeholder 的业务名字，用来在 `RendererRegistry` 里找到对应 renderer。
+5. renderer:
+    一段 Python 函数或类，它接收 `placeholder + context`，返回一个 `Content` 对象。
+
+模板协议：
+    shape.name 必须符合 `ph:<type>:<key>`，例如：
+
+    - `ph:text:title`
+    - `ph:image:logo`
+    - `ph:table:risk_table`
+    - `ph:chart:sales_chart`
+
+`type` 与 renderer 返回值的对应关系：
+    - `text`
+        用于文本类 placeholder。renderer 返回 `TextContent`。
+        SDK 会把文本写回原文本框，并尽量保留原 placeholder 的主样式。
+    - `image`
+        用于图片区域 placeholder。renderer 返回 `ImageContent`。
+        SDK 会在该区域插入图片；这类内容通常不是直接修改原 shape。
+    - `chart`
+        当前按图片方式写回。renderer 返回 `ChartContent`。
+        它和 `image` 类似，本质上是“提供一张图，写回到指定区域”。
+    - `table`
+        用于表格区域 placeholder。renderer 有两种返回方式：
+        1. `TableContent`：整表替换，适合你一次生成整张表的数据。
+        2. `TableCellsContent`：局部更新 cell，适合只改原生表格中的少量单元格。
+
+为什么 renderer 返回 `Content`，而不是直接改 shape：
+    - 业务层只需要描述“要放什么内容”，不用关心 `python-pptx` 的底层写回细节。
+    - 不同 `type` 的写回方式不同，尤其是 `image` / `chart` 往往不是原位修改。
+    - SDK 可以统一做类型校验、样式保持和错误处理。
 
 接口列表：
     PptTemplateEngine:
         模板渲染主入口。负责加载模板、解析 placeholder、调用 renderer、执行文本替换并输出 PPT。
     RendererRegistry:
-        管理占位块 key 与 renderer 的映射，支持类式、函数式和装饰器式注册。
+        管理 `key -> renderer` 的映射。注意它不是按 `type` 注册，而是按 `key` 注册。
     BaseRenderer:
         类式 renderer 的基类。业务方可以继承它并实现 `render()`。
     RenderContext:
@@ -26,14 +65,11 @@ SDK 负责解析 `.pptx` 模板、识别 `ph:<type>:<key>` 占位块、调度 re
     PptTemplateSdkError 及其子类:
         SDK 的统一异常体系。
 
-适用场景：
-    - 业务项目希望直接 vendoring 一个 SDK 文件，而不是维护多文件包结构。
-    - 模板作者通过 `shape.name` 定义 placeholder，业务侧通过 Python 代码填充内容。
-    - 渲染完成后还需要继续做 slide、section 或表格结构调整。
-
-依赖：
-    - Python >= 3.10
-    - python-pptx
+最小流程：
+    1. 在 PPT 模板中给某个 shape 命名 `ph:<type>:<key>`。
+    2. 在 Python 中用 `RendererRegistry` 为这个 `key` 注册 renderer。
+    3. renderer 根据业务数据返回对应的 `Content`。
+    4. 调用 `PptTemplateEngine.render()` 输出渲染后的 PPT。
 
 Example:
     ```python
@@ -41,6 +77,7 @@ Example:
         PptTemplateEngine,
         RenderContext,
         RendererRegistry,
+        TableCellsContent,
         TextContent,
     )
 
@@ -49,6 +86,10 @@ Example:
     @registry.renderer("title")
     def render_title(placeholder, context):
         return TextContent(text=context.get_value("project.name", "未命名项目"))
+
+    @registry.renderer("risk_table")
+    def render_risk_table(placeholder, context):
+        return TableCellsContent(cells={(1, 0): "现金流", (1, 1): "高"})
 
     engine = PptTemplateEngine(registry=registry)
     result = engine.render(
@@ -349,14 +390,28 @@ class ChartContent(Content):
 class Placeholder:
     """模板占位块的标准化描述对象。
 
-    字段说明：
-        type: 占位块类型，例如 ``text``、``image``、``table``、``chart``。
-        key: 业务侧注册的唯一 key。
-        slide_index: 占位块所在 slide 的 ``0-based`` 索引。
+    `Placeholder` 不是 `python-pptx` 原生类型，而是 SDK 在解析模板后生成的
+    描述对象。它把 `shape.name = ph:<type>:<key>` 里的信息拆出来，供 renderer
+    和写回逻辑统一使用。
+
+    Args:
+        type: 占位块类型，来自 `ph:<type>:<key>` 中的 `<type>`，例如 `text`、
+            `image`、`table`、`chart`。
+        key: 占位块业务 key，来自 `ph:<type>:<key>` 中的 `<key>`。
+        slide_index: 占位块所在 slide 的 `0-based` 索引。
         shape_id: 原始 shape id，常用于日志与后续操作定位。
-        shape_name: 原始 ``shape.name``。
-        left/top/width/height: 占位区域的几何信息。
+        shape_name: 原始 `shape.name`。
+        left: 占位区域左侧坐标。
+        top: 占位区域顶部坐标。
+        width: 占位区域宽度。
+        height: 占位区域高度。
         shape: 原始底层 shape 对象，仅供 SDK 内部写回使用。
+
+    Example:
+        如果模板里的 shape.name 是 `ph:text:title`，解析后会得到：
+
+        - `placeholder.type == "text"`
+        - `placeholder.key == "title"`
     """
 
     type: str
@@ -428,7 +483,11 @@ class BaseRenderer:
     """自定义 renderer 的基类。
 
     业务侧通常继承该类并实现 `render()`，或使用 `RendererRegistry` 的函数
-    式注册方式。若希望在校验阶段提前参与类型检查，可声明 `supported_types`。
+    式注册方式。一个 renderer 不直接操作 PPT shape，而是返回一个 `Content`
+    子类，让 SDK 统一完成写回。
+
+    `supported_types` 用于声明这个 renderer 能处理哪些 placeholder `type`。
+    例如一个只负责文本的 renderer 可以声明 `{"text"}`。
 
     Example:
         ```python
@@ -445,6 +504,10 @@ class BaseRenderer:
     def render(self, placeholder: Placeholder, context: RenderContext, **kwargs):
         """根据占位块和上下文生成渲染结果。
 
+        这是 renderer 的核心接口。调用时，SDK 已经根据 placeholder 的 `key`
+        找到了对应 renderer，并把当前占位块和业务上下文传进来。你的任务只有一件事：
+        返回与 `placeholder.type` 匹配的 `Content`。
+
         Args:
             placeholder: 当前占位块描述。
             context: 当前渲染上下文。
@@ -453,6 +516,17 @@ class BaseRenderer:
         Returns:
             `TextContent`、`ImageContent`、`TableContent`、`TableCellsContent`
             或 `ChartContent`。
+
+        Example:
+            ```python
+            def render_risk_table(placeholder, context):
+                if context.get_value("mode") == "patch":
+                    return TableCellsContent(cells={(1, 0): "现金流"})
+                return TableContent(
+                    headers=["风险", "等级"],
+                    rows=[["现金流", "高"]],
+                )
+            ```
         """
 
         raise NotImplementedError
@@ -482,8 +556,16 @@ class _BoundRenderer(BaseRenderer):
 class RendererRegistry:
     """管理模板占位块 renderer 的注册与查询。
 
-    它是模板 key 与业务渲染逻辑之间的桥梁，支持类式 renderer、函数式 renderer
-    和装饰器注册。
+    它是模板 `key` 与业务渲染逻辑之间的桥梁。注意：注册是按 `key` 做的，
+    不是按 `type` 做的。
+
+    例如：
+    - 模板里有 `ph:text:title`
+    - 这里注册 `key="title"` 的 renderer
+    - 运行时 SDK 会把这个 placeholder 分发给该 renderer
+
+    `type` 的作用不是“选 renderer”，而是“校验 renderer 返回值是否正确”。
+    例如 `ph:text:title` 对应的 renderer 必须返回 `TextContent`。
 
     Example:
         ```python
@@ -964,8 +1046,8 @@ CONTENT_TYPE_MAP = {
 class PptTemplateEngine:
     """PPT 模板渲染主引擎。
 
-    这是单文件版最主要的入口，负责加载模板、解析占位块、调度 renderer、
-    执行文本替换，并输出最终的 PPT 文件或字节流。
+    这是单文件版最主要的入口。它负责把“模板里的 placeholder”与“代码里的 renderer”
+    连接起来，并在最后输出渲染后的 PPT。
 
     Args:
         registry: 已注册 renderer 的 `RendererRegistry`。
@@ -996,6 +1078,17 @@ class PptTemplateEngine:
         context: Optional[RenderContext] = None,
     ) -> RenderResult:
         """执行模板渲染。
+
+        整个流程如下：
+        1. 读取模板并扫描所有 `ph:<type>:<key>` placeholder。
+        2. 按 `key` 去 `RendererRegistry` 查找 renderer。
+        3. 调用 renderer，拿到 `Content`。
+        4. 校验 `Content` 是否和 placeholder 的 `type` 匹配。
+        5. 把内容写回 PPT。
+        6. 最后再做普通文本和表格单元格中的 `{{field}}` 替换。
+
+        如果你第一次接触这个库，可以把它理解成：
+        “模板负责标记位置，renderer 负责给数据，engine 负责把两者拼起来”。
 
         Args:
             template_path: 模板文件路径，与 `template_bytes` 二选一。
