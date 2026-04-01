@@ -830,3 +830,59 @@ def test_table_cells_content_append_adds_new_run(tmp_path: Path):
     assert appended_run.font.bold is True
     assert appended_run.font.color.rgb == RGBColor(0xFF, 0x00, 0x00)
     assert appended_run.font.size == Pt(12)
+
+
+def test_table_content_plain_strings_match_cell_defaults(tmp_path: Path):
+    template_path = tmp_path / "plain-string-table.pptx"
+    output_path = tmp_path / "plain-string-table-out.pptx"
+    _build_native_table_placeholder_template(template_path)
+
+    registry = RendererRegistry()
+    registry.register_func(
+        "risk_table",
+        lambda placeholder, context: TableContent(headers=["风险", "等级"], rows=[["现金流", "高"]]),
+    )
+
+    PptTemplateEngine(registry).render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=RenderContext(data={}),
+    )
+
+    rendered = Presentation(str(output_path))
+    shape = next(shape for shape in rendered.slides[0].shapes if getattr(shape, "name", None) == "ph:table:risk_table")
+    paragraph = shape.table.cell(1, 1).text_frame.paragraphs[0]
+    run = paragraph.runs[0]
+
+    assert shape.table.cell(1, 1).text == "高"
+    assert len(paragraph.runs) == 1
+    assert run.text == "高"
+    assert run.font.size == Pt(12)
+
+
+def test_table_cells_content_plain_strings_match_cell_defaults(tmp_path: Path):
+    template_path = tmp_path / "plain-string-partial-table.pptx"
+    output_path = tmp_path / "plain-string-partial-table-out.pptx"
+    _build_native_table_placeholder_template(template_path)
+
+    registry = RendererRegistry()
+    registry.register_func(
+        "risk_table",
+        lambda placeholder, context: TableCellsContent(cells={(1, 1): "中"}),
+    )
+
+    PptTemplateEngine(registry).render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=RenderContext(data={}),
+    )
+
+    rendered = Presentation(str(output_path))
+    shape = next(shape for shape in rendered.slides[0].shapes if getattr(shape, "name", None) == "ph:table:risk_table")
+    paragraph = shape.table.cell(1, 1).text_frame.paragraphs[0]
+    run = paragraph.runs[0]
+
+    assert shape.table.cell(1, 1).text == "中"
+    assert len(paragraph.runs) == 1
+    assert run.text == "中"
+    assert run.font.size == Pt(12)

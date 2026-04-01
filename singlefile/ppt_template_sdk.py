@@ -402,6 +402,8 @@ def cell(
 
     Returns:
         可放入 `TableContent` 或 `TableCellsContent` 的 cell 值对象。
+        若表格中直接传字符串，SDK 会按隐式 `cell(text)` 处理，因此默认行为与
+        `cell("...")` 保持一致。
 
     Example:
         ```python
@@ -848,7 +850,8 @@ class PptxAdapter:
         if isinstance(value, _CellValue):
             return str(value.text), value
         if isinstance(value, str):
-            return value, None
+            implicit_value = cell(value)
+            return implicit_value.text, implicit_value
         raise ShapeOperationError(
             f"table cell value must be str or cell(...), got '{type(value).__name__}'"
         )
