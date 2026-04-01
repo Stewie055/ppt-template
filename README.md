@@ -61,6 +61,7 @@ from ppt_template_sdk import (
     PptTemplateEngine,
     RenderContext,
     RendererRegistry,
+    TableCellsContent,
     TableContent,
     TextContent,
 )
@@ -151,6 +152,15 @@ registry.register_func("title", render_label, prefix="标题：")
 registry.register_func("subtitle", render_label, prefix="副标题：")
 ```
 
+局部更新原生表格 cell 时，renderer 可以直接返回坐标字典：
+
+```python
+registry.register_func(
+    "risk_table",
+    lambda placeholder, context: TableCellsContent(cells={(1, 0): "现金流", (1, 1): "高"}),
+)
+```
+
 ### `PptOperations`
 
 适合渲染后或独立脚本中做结构调整：
@@ -162,6 +172,7 @@ ops = PptOperations.load(template_path="examples/assets/operations_template.pptx
 ops.insert_slide(target_index=1, layout_index=6)
 ops.add_section("正文", start_slide_index=1)
 ops.delete_table_row(slide_index=0, shape_locator="ops-table", row_index=1)
+ops.patch_table_cells(slide_index=0, shape_locator="ops-table", cells={(1, 0): "现金流"})
 ops.save_to_path("examples/output/operations_output.pptx")
 ```
 
@@ -172,6 +183,7 @@ ops.save_to_path("examples/output/operations_output.pptx")
 - `text` placeholder 会保留原文本框格式，并继承原 placeholder 首段首 run 的主样式
 - 原生 `table` placeholder 会原位写回，保留列宽、行高和单元格样式
 - 原生 `table` placeholder 与返回表格尺寸不一致时会直接报错
+- 若只想更新原生表格中的部分 cell，使用 `TableCellsContent` 或 `patch_table_cells()`
 - `slide_index`、`section_index`、表格行列索引全部是 `0-based`
 - `shape_locator` 优先建议传 `shape_id`，也支持 `shape_name`
 - 已合并表格不支持删行删列

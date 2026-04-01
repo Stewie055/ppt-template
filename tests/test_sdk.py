@@ -409,6 +409,7 @@ def test_singlefile_exports_match_expected_surface():
         "RendererNotFoundError",
         "RendererRegistry",
         "ShapeOperationError",
+        "TableCellsContent",
         "TableContent",
         "TemplateParseError",
         "TextReplaceResult",
@@ -524,3 +525,86 @@ def test_singlefile_native_table_placeholder_size_mismatch_errors(tmp_path: Path
     engine = sdk.PptTemplateEngine(registry)
     with pytest.raises(sdk.ShapeOperationError, match="table placeholder size mismatch"):
         engine.render(template_path=str(template_path), context=sdk.RenderContext(data={}))
+
+
+def test_singlefile_table_cells_content_updates_only_targeted_cells(tmp_path: Path):
+    sdk = _load_singlefile_module()
+    template_path = tmp_path / "native-table-cells.pptx"
+    output_path = tmp_path / "native-table-cells-out.pptx"
+    _build_native_table_placeholder_template(template_path)
+
+    registry = sdk.RendererRegistry()
+    registry.register_func(
+        "risk_table",
+        lambda placeholder, context: sdk.TableCellsContent(cells={(1, 0): "现金流", (1, 1): "高"}),
+    )
+
+    sdk.PptTemplateEngine(registry).render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=sdk.RenderContext(data={}),
+    )
+
+    rendered = Presentation(str(output_path))
+    shape = next(shape for shape in rendered.slides[0].shapes if getattr(shape, "name", None) == "ph:table:risk_table")
+    table = shape.table
+    header_paragraph = table.cell(0, 0).text_frame.paragraphs[0]
+    header_run = header_paragraph.runs[0]
+
+    assert table.cell(0, 0).text == "风险"
+    assert table.cell(0, 1).text == "等级"
+    assert table.cell(1, 0).text == "现金流"
+    assert table.cell(1, 1).text == "高"
+    assert header_paragraph.alignment == PP_ALIGN.CENTER
+    assert header_run.font.name == "Arial"
+    assert header_run.font.size == Pt(20)
+    assert header_run.font.bold is True
+    assert header_run.font.color.rgb == RGBColor(0x44, 0x55, 0x66)
+
+
+def test_singlefile_table_cells_content_rejects_non_native_table_placeholder(tmp_path: Path):
+    sdk = _load_singlefile_module()
+    template_path = tmp_path / "textbox-table-placeholder.pptx"
+    _build_template(template_path)
+
+    registry = sdk.RendererRegistry()
+    registry.register_func("title", lambda placeholder, context: sdk.TextContent(text="标题"))
+    registry.register_func("logo", lambda placeholder, context: sdk.ImageContent(image_path=str(tmp_path / "logo.png")))
+    registry.register_func("sales", lambda placeholder, context: sdk.ChartContent(image_path=str(tmp_path / "chart.png")))
+    registry.register_func("risk_table", lambda placeholder, context: sdk.TableCellsContent(cells={(0, 0): "仅更新"}))
+    _write_png(tmp_path / "logo.png")
+    _write_png(tmp_path / "chart.png")
+
+    with pytest.raises(sdk.ShapeOperationError, match="cannot accept partial table cell updates"):
+        sdk.PptTemplateEngine(registry).render(
+            template_path=str(template_path),
+            context=sdk.RenderContext(data={"project": {"name": "Aurora"}, "owner": {"name": "Bob"}, "report_date": "2026-04-01"}),
+        )
+
+
+def test_singlefile_patch_table_cells_operation_updates_selected_cells(tmp_path: Path):
+    sdk = _load_singlefile_module()
+    template_path = tmp_path / "ops-patch-table.pptx"
+    _build_native_table_placeholder_template(template_path)
+
+    ops = sdk.PptOperations.load(template_path=str(template_path))
+    ops.patch_table_cells(0, "ph:table:risk_table", {(1, 0): "履约", (1, 1): ""})
+
+    rendered = Presentation(BytesIO(ops.save_to_bytes()))
+    shape = next(shape for shape in rendered.slides[0].shapes if getattr(shape, "name", None) == "ph:table:risk_table")
+    table = shape.table
+
+    assert table.cell(0, 0).text == "风险"
+    assert table.cell(0, 1).text == "等级"
+    assert table.cell(1, 0).text == "履约"
+    assert table.cell(1, 1).text == ""
+
+
+def test_singlefile_patch_table_cells_rejects_out_of_range_coordinates(tmp_path: Path):
+    sdk = _load_singlefile_module()
+    template_path = tmp_path / "ops-patch-table-range.pptx"
+    _build_native_table_placeholder_template(template_path)
+
+    ops = sdk.PptOperations.load(template_path=str(template_path))
+    with pytest.raises(sdk.ShapeOperationError, match="out of range"):
+        ops.patch_table_cells(0, "ph:table:risk_table", {(9, 9): "bad"})

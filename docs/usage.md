@@ -66,6 +66,17 @@ registry.register_func("title", render_label, prefix="标题：")
 registry.register_func("subtitle", render_label, prefix="副标题：")
 ```
 
+局部更新原生表格中的部分 cell 时，可直接返回坐标字典：
+
+```python
+from ppt_template_sdk import TableCellsContent
+
+registry.register_func(
+    "risk_table",
+    lambda placeholder, context: TableCellsContent(cells={(1, 0): "现金流", (1, 1): "高"}),
+)
+```
+
 ### 类式
 
 ```python
@@ -161,6 +172,7 @@ report = engine.validate(template_path="examples/assets/report_template.pptx")
 - `text` placeholder 会保留原文本框格式，并继承原 placeholder 首段首 run 的主样式
 - 原生 `table` placeholder 会原位写回，保留列宽、行高和单元格样式
 - 原生 `table` placeholder 与 `TableContent` 尺寸不一致时会直接报错
+- 若只需更新原生表格中的少量 cell，优先返回 `TableCellsContent`
 - 若渲染后还需要结构调整，使用 `PptOperations`
 - 若只是做字段替换，不必走完整 `PptTemplateEngine`，可直接用 `TextReplacer`
 

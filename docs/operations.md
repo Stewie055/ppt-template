@@ -122,6 +122,16 @@ ops.delete_table_row(slide_index=0, shape_locator="ops-table", row_index=1)
 ops.delete_table_column(slide_index=0, shape_locator="ops-table", column_index=1)
 ```
 
+### 局部更新表格 cell
+
+```python
+ops.patch_table_cells(
+    slide_index=0,
+    shape_locator="ops-table",
+    cells={(1, 0): "现金流", (1, 1): "高"},
+)
+```
+
 ### 合并单元格
 
 ```python
@@ -146,6 +156,7 @@ ops.merge_table_cells(
 - 若你通过 `PptTemplateEngine` 渲染 `text` placeholder，SDK 会保留原文本框格式，并继承原 placeholder 首段首 run 的主样式。
 - 若 `table` placeholder 本身是原生表格，SDK 会原位写回单元格文本，保留列宽、行高和单元格样式。
 - 原生表格 placeholder 与 `TableContent` 尺寸不一致时会直接报错，不会自动增删行列。
+- 若只更新原生表格中的部分 cell，使用 `TableCellsContent` 或 `patch_table_cells()`。
 
 ## 6. 异常建议
 

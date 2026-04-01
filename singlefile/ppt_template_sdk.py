@@ -288,6 +288,21 @@ class TableContent(Content):
 
 
 @dataclass(slots=True)
+class TableCellsContent(Content):
+    """表格单元格局部更新的渲染结果。
+
+    字段说明：
+        cells: 需要更新的 cell 文本映射，key 为 ``(row, col)`` 的 ``0-based``
+            绝对坐标，value 为要写入的文本。空字符串表示清空该 cell。
+
+    说明：
+        该类型只适用于原生表格 placeholder，不适用于文本框型 table 区域。
+    """
+
+    cells: dict[tuple[int, int], str]
+
+
+@dataclass(slots=True)
 class ChartContent(Content):
     """图表占位块的渲染结果。
 
@@ -561,6 +576,13 @@ class PptxAdapter:
                     table.cell(row_index, col_index).text = value
             PptxAdapter._remove_shape(shape)
             return
+        if isinstance(content, TableCellsContent):
+            if not getattr(shape, "has_table", False):
+                raise ShapeOperationError(
+                    f"shape '{placeholder.shape_name}' cannot accept partial table cell updates"
+                )
+            PptxAdapter._patch_table_cells(shape.table, content.cells)
+            return
         raise ShapeOperationError(f"unsupported content type '{type(content).__name__}'")
 
     @staticmethod
@@ -586,6 +608,22 @@ class PptxAdapter:
             for col_index, value in enumerate(row_values):
                 PptxAdapter._set_text_frame_text_preserving_style(table.cell(row_index, col_index).text_frame, value)
         return True
+
+    @staticmethod
+    def _patch_table_cells(table, cells: dict[tuple[int, int], str]) -> None:
+        max_rows = len(table.rows)
+        max_cols = len(table.columns)
+        for coordinates, value in cells.items():
+            if not isinstance(coordinates, tuple) or len(coordinates) != 2:
+                raise ShapeOperationError("table cell coordinates must be (row, col) tuples")
+            row_index, col_index = coordinates
+            if not isinstance(row_index, int) or not isinstance(col_index, int):
+                raise ShapeOperationError("table cell coordinates must use integer row and col indexes")
+            if row_index < 0 or row_index >= max_rows or col_index < 0 or col_index >= max_cols:
+                raise ShapeOperationError(
+                    f"table cell coordinate ({row_index}, {col_index}) out of range for {max_rows}x{max_cols} table"
+                )
+            PptxAdapter._set_text_frame_text_preserving_style(table.cell(row_index, col_index).text_frame, str(value))
 
     @staticmethod
     def _remove_shape(shape) -> None:
@@ -840,10 +878,10 @@ class TextReplacer:
 
 
 CONTENT_TYPE_MAP = {
-    "text": TextContent,
-    "image": ImageContent,
-    "table": TableContent,
-    "chart": ChartContent,
+    "text": (TextContent,),
+    "image": (ImageContent,),
+    "table": (TableContent, TableCellsContent),
+    "chart": (ChartContent,),
 }
 
 
@@ -916,10 +954,11 @@ class PptTemplateEngine:
             if renderer is None:
                 raise RendererNotFoundError(f"missing renderer for placeholder key '{key}'")
             content = renderer.render(placeholders[0], context)
-            expected_type = CONTENT_TYPE_MAP[placeholders[0].type]
-            if not isinstance(content, expected_type):
+            expected_types = CONTENT_TYPE_MAP[placeholders[0].type]
+            if not isinstance(content, expected_types):
+                expected_names = ", ".join(expected_type.__name__ for expected_type in expected_types)
                 raise ContentTypeMismatchError(
-                    f"renderer '{key}' returned {type(content).__name__}, expected {expected_type.__name__}"
+                    f"renderer '{key}' returned {type(content).__name__}, expected one of: {expected_names}"
                 )
             for placeholder in placeholders:
                 self.adapter.write_content(presentation, placeholder, content)
@@ -1180,6 +1219,26 @@ class PptOperations:
         for tr in table._tbl.tr_lst:
             tr.remove(tr.tc_lst[column_index])
 
+    def patch_table_cells(
+        self,
+        slide_index: int,
+        shape_locator: Union[int, str],
+        cells: dict[tuple[int, int], str],
+    ) -> None:
+        """只更新指定表格单元格的文本。
+
+        参数：
+            slide_index: 目标 slide 的 ``0-based`` 索引。
+            shape_locator: 推荐传 ``shape_id``，也支持 ``shape_name``。
+            cells: 需要更新的 cell 文本映射，key 为 ``(row, col)`` 坐标。
+
+        说明：
+            该方法只修改命中的 cell 文本，并保留目标 cell 原有样式。
+        """
+
+        table = self._resolve_table(slide_index, shape_locator)
+        self.adapter._patch_table_cells(table, cells)
+
     def merge_table_cells(
         self,
         slide_index: int,
@@ -1335,6 +1394,7 @@ __all__ = [
     "RendererRegistry",
     "ShapeOperationError",
     "TableContent",
+    "TableCellsContent",
     "TemplateParseError",
     "TextReplaceResult",
     "TextReplacer",
