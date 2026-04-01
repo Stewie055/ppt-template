@@ -24,6 +24,7 @@ from ppt_template_sdk import (
     ChartContent,
     ContentTypeMismatchError,
     DuplicatePlaceholderError,
+    cell,
     EngineOptions,
     ImageContent,
     OperationError,
@@ -31,10 +32,8 @@ from ppt_template_sdk import (
     PptOperations,
     RenderContext,
     RendererRegistry,
-    TableCellValue,
     TableCellsContent,
     TableContent,
-    TextStyle,
     TextReplacer,
     TextContent,
 )
@@ -452,6 +451,7 @@ def test_singlefile_exports_match_expected_surface():
         "ChartContent",
         "Content",
         "ContentTypeMismatchError",
+        "cell",
         "DuplicatePlaceholderError",
         "EngineOptions",
         "FieldReplaceError",
@@ -467,11 +467,9 @@ def test_singlefile_exports_match_expected_surface():
         "RendererNotFoundError",
         "RendererRegistry",
         "ShapeOperationError",
-        "TableCellValue",
         "TableCellsContent",
         "TableContent",
         "TemplateParseError",
-        "TextStyle",
         "TextReplaceResult",
         "TextReplacer",
         "TextContent",
@@ -683,7 +681,7 @@ def test_table_content_can_override_cell_font_style(tmp_path: Path):
             rows=[
                 [
                     "现金流",
-                    TableCellValue(text="高", style=TextStyle(color_rgb="FF0000", bold=True)),
+                    cell("高", color="FF0000", bold=True),
                 ]
             ],
         ),
@@ -715,10 +713,7 @@ def test_table_cells_content_can_override_partial_cell_font_style(tmp_path: Path
         "risk_table",
         lambda placeholder, context: TableCellsContent(
             cells={
-                (1, 1): TableCellValue(
-                    text="中",
-                    style=TextStyle(color_rgb="00AA00", italic=True),
-                )
+                (1, 1): cell("中", color="00AA00", italic=True)
             }
         ),
     )

@@ -37,6 +37,7 @@
         用于表格区域 placeholder。renderer 有两种返回方式：
         1. `TableContent`：整表替换，适合你一次生成整张表的数据。
         2. `TableCellsContent`：局部更新 cell，适合只改原生表格中的少量单元格。
+        需要覆盖字体样式时，使用 `cell(...)` helper。
 
 为什么 renderer 返回 `Content`，而不是直接改 shape：
     - 业务层只需要描述“要放什么内容”，不用关心 `python-pptx` 的底层写回细节。
@@ -60,6 +61,8 @@
         渲染引擎配置对象。
     TextContent / ImageContent / TableContent / TableCellsContent / ChartContent:
         renderer 返回的标准内容类型。
+    cell:
+        表格 cell helper。用于同时提供文本和值级字体样式覆盖。
     RenderResult / ValidationReport / TextReplaceResult:
         渲染、校验和文本替换的结构化结果。
     PptTemplateSdkError 及其子类:
@@ -79,6 +82,7 @@ Example:
         RendererRegistry,
         TableCellsContent,
         TextContent,
+        cell,
     )
 
     registry = RendererRegistry()
@@ -89,7 +93,7 @@ Example:
 
     @registry.renderer("risk_table")
     def render_risk_table(placeholder, context):
-        return TableCellsContent(cells={(1, 0): "现金流", (1, 1): "高"})
+        return TableCellsContent(cells={(1, 0): "现金流", (1, 1): cell("高", color="FF0000")})
 
     engine = PptTemplateEngine(registry=registry)
     result = engine.render(
@@ -341,8 +345,8 @@ class TableContent(Content):
     """整表替换用的表格渲染结果。
 
     Args:
-        headers: 表头行；为空时表示只有数据行。元素可为字符串或 `TableCellValue`。
-        rows: 二维数组，每个子列表代表一行。元素可为字符串或 `TableCellValue`。
+        headers: 表头行；为空时表示只有数据行。元素可为字符串或 `cell(...)`。
+        rows: 二维数组，每个子列表代表一行。元素可为字符串或 `cell(...)`。
 
     Example:
         ```python
@@ -358,19 +362,9 @@ class TableContent(Content):
 
 
 @dataclass
-class TextStyle:
-    """文本样式覆盖对象。
-
-    Args:
-        color_rgb: 6 位 RGB 十六进制字符串，例如 `FF0000`。
-        font_name: 字体名称。
-        font_size: 字号，单位与 `python-pptx` 的 `font.size` 一致。
-        bold: 是否加粗。
-        italic: 是否斜体。
-        underline: 是否下划线。
-    """
-
-    color_rgb: Optional[str] = None
+class _CellValue:
+    text: str
+    color: Optional[str] = None
     font_name: Optional[str] = None
     font_size: Optional[Any] = None
     bold: Optional[bool] = None
@@ -378,22 +372,51 @@ class TextStyle:
     underline: Optional[bool] = None
 
 
-@dataclass
-class TableCellValue:
-    """表格单元格值对象。
+def cell(
+    text: Any,
+    *,
+    color: Optional[str] = None,
+    bold: Optional[bool] = None,
+    italic: Optional[bool] = None,
+    underline: Optional[bool] = None,
+    font_name: Optional[str] = None,
+    font_size: Optional[Any] = None,
+) -> _CellValue:
+    """创建一个带可选字体样式覆盖的表格 cell 值。
+
+    这是表格 cell 的推荐写法。相比直接构造对象，`cell(...)` 更接近
+    `set_cell_text()` 的使用心智：先给文本，再按需补颜色和常用字体样式。
 
     Args:
         text: 需要写入 cell 的文本。
-        style: 可选字体样式覆盖；未传时沿用模板 cell 原样式。
+        color: 6 位 RGB 十六进制字符串，例如 `FF0000`。
+        bold: 是否加粗。
+        italic: 是否斜体。
+        underline: 是否下划线。
+        font_name: 字体名称。
+        font_size: 字号，单位与 `python-pptx` 的 `font.size` 一致。
+
+    Returns:
+        可放入 `TableContent` 或 `TableCellsContent` 的 cell 值对象。
 
     Example:
         ```python
-        TableCellValue(text="高", style=TextStyle(color_rgb="FF0000", bold=True))
+        return TableContent(
+            headers=["风险", "等级"],
+            rows=[["现金流", cell("高", color="FF0000", bold=True)]],
+        )
         ```
     """
 
-    text: str
-    style: Optional[TextStyle] = None
+    return _CellValue(
+        text=str(text),
+        color=color,
+        font_name=font_name,
+        font_size=font_size,
+        bold=bold,
+        italic=italic,
+        underline=underline,
+    )
 
 
 @dataclass
@@ -404,7 +427,7 @@ class TableCellsContent(Content):
 
     Args:
         cells: 需要更新的 cell 映射。key 为 `(row, col)` 的 `0-based`
-            绝对坐标，value 可为字符串或 `TableCellValue`。空字符串表示清空该 cell。
+            绝对坐标，value 可为字符串或 `cell(...)`。空字符串表示清空该 cell。
 
     Example:
         ```python
@@ -563,7 +586,7 @@ class BaseRenderer:
             ```python
             def render_risk_table(placeholder, context):
                 if context.get_value("mode") == "patch":
-                    return TableCellsContent(cells={(1, 0): "现金流"})
+                    return TableCellsContent(cells={(1, 0): cell("现金流", color="FF0000")})
                 return TableContent(
                     headers=["风险", "等级"],
                     rows=[["现金流", "高"]],
@@ -651,7 +674,7 @@ class RendererRegistry:
             ```python
             registry.register_func(
                 "risk_table",
-                lambda placeholder, context: TableCellsContent(cells={(1, 0): "现金流"}),
+                lambda placeholder, context: TableCellsContent(cells={(1, 0): cell("现金流", color="FF0000")}),
             )
             ```
         """
@@ -820,13 +843,13 @@ class PptxAdapter:
             )
 
     @staticmethod
-    def _normalize_table_cell_value(value: Any) -> tuple[str, Optional[TextStyle]]:
-        if isinstance(value, TableCellValue):
-            return str(value.text), value.style
+    def _normalize_table_cell_value(value: Any) -> tuple[str, Optional[_CellValue]]:
+        if isinstance(value, _CellValue):
+            return str(value.text), value
         if isinstance(value, str):
             return value, None
         raise ShapeOperationError(
-            f"table cell value must be str or TableCellValue, got '{type(value).__name__}'"
+            f"table cell value must be str or cell(...), got '{type(value).__name__}'"
         )
 
     @staticmethod
@@ -870,7 +893,7 @@ class PptxAdapter:
     def _set_text_frame_text_preserving_style(
         text_frame,
         text: str,
-        style_override: Optional[TextStyle] = None,
+        style_override: Optional[_CellValue] = None,
     ) -> None:
         style = PptxAdapter._capture_text_style(text_frame)
         text_frame.clear()
@@ -907,7 +930,7 @@ class PptxAdapter:
             PptxAdapter._apply_text_style_override(font, style_override)
 
     @staticmethod
-    def _apply_text_style_override(font, style: TextStyle) -> None:
+    def _apply_text_style_override(font, style: _CellValue) -> None:
         if style.font_name is not None:
             font.name = style.font_name
         if style.font_size is not None:
@@ -918,10 +941,10 @@ class PptxAdapter:
             font.italic = style.italic
         if style.underline is not None:
             font.underline = style.underline
-        if style.color_rgb is not None:
-            if not re.fullmatch(r"[0-9A-Fa-f]{6}", style.color_rgb):
-                raise ShapeOperationError("TextStyle.color_rgb must be a 6-digit RGB hex string")
-            font.color.rgb = RGBColor.from_string(style.color_rgb.upper())
+        if style.color is not None:
+            if not re.fullmatch(r"[0-9A-Fa-f]{6}", style.color):
+                raise ShapeOperationError("cell(..., color=...) must use a 6-digit RGB hex string")
+            font.color.rgb = RGBColor.from_string(style.color.upper())
 
 
 @dataclass
@@ -1689,6 +1712,7 @@ __all__ = [
     "ChartContent",
     "Content",
     "ContentTypeMismatchError",
+    "cell",
     "DuplicatePlaceholderError",
     "EngineOptions",
     "FieldReplaceError",
@@ -1704,13 +1728,11 @@ __all__ = [
     "RendererNotFoundError",
     "RendererRegistry",
     "ShapeOperationError",
-    "TableCellValue",
     "TableContent",
     "TableCellsContent",
     "TemplateParseError",
     "TextReplaceResult",
     "TextReplacer",
     "TextContent",
-    "TextStyle",
     "ValidationReport",
 ]
