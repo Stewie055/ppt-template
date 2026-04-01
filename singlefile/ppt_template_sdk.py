@@ -121,6 +121,7 @@ from lxml import etree
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.util import Pt
 
 
 _MISSING = object()
@@ -366,10 +367,11 @@ class _CellValue:
     text: str
     color: Optional[str] = None
     font_name: Optional[str] = None
-    font_size: Optional[Any] = None
+    font_size: Optional[Any] = 12
     bold: Optional[bool] = None
     italic: Optional[bool] = None
     underline: Optional[bool] = None
+    append: bool = False
 
 
 def cell(
@@ -380,7 +382,8 @@ def cell(
     italic: Optional[bool] = None,
     underline: Optional[bool] = None,
     font_name: Optional[str] = None,
-    font_size: Optional[Any] = None,
+    font_size: Optional[Any] = 12,
+    append: bool = False,
 ) -> _CellValue:
     """创建一个带可选字体样式覆盖的表格 cell 值。
 
@@ -394,7 +397,8 @@ def cell(
         italic: 是否斜体。
         underline: 是否下划线。
         font_name: 字体名称。
-        font_size: 字号，单位与 `python-pptx` 的 `font.size` 一致。
+        font_size: 字号，单位与 `python-pptx` 的 `font.size` 一致。默认 `12`。
+        append: 若为 `True`，则保留原 cell 文本并追加一个新的 run。
 
     Returns:
         可放入 `TableContent` 或 `TableCellsContent` 的 cell 值对象。
@@ -412,10 +416,11 @@ def cell(
         text=str(text),
         color=color,
         font_name=font_name,
-        font_size=font_size,
+        font_size=Pt(font_size) if isinstance(font_size, (int, float)) else font_size,
         bold=bold,
         italic=italic,
         underline=underline,
+        append=append,
     )
 
 
@@ -818,9 +823,7 @@ class PptxAdapter:
         for row_index, row_values in enumerate(grid):
             for col_index, value in enumerate(row_values):
                 text, style_override = PptxAdapter._normalize_table_cell_value(value)
-                PptxAdapter._set_text_frame_text_preserving_style(
-                    table.cell(row_index, col_index).text_frame, text, style_override
-                )
+                PptxAdapter._write_table_cell_text(table.cell(row_index, col_index).text_frame, text, style_override)
         return True
 
     @staticmethod
@@ -838,9 +841,7 @@ class PptxAdapter:
                     f"table cell coordinate ({row_index}, {col_index}) out of range for {max_rows}x{max_cols} table"
                 )
             text, style_override = PptxAdapter._normalize_table_cell_value(value)
-            PptxAdapter._set_text_frame_text_preserving_style(
-                table.cell(row_index, col_index).text_frame, text, style_override
-            )
+            PptxAdapter._write_table_cell_text(table.cell(row_index, col_index).text_frame, text, style_override)
 
     @staticmethod
     def _normalize_table_cell_value(value: Any) -> tuple[str, Optional[_CellValue]]:
@@ -851,6 +852,13 @@ class PptxAdapter:
         raise ShapeOperationError(
             f"table cell value must be str or cell(...), got '{type(value).__name__}'"
         )
+
+    @staticmethod
+    def _write_table_cell_text(text_frame, text: str, style_override: Optional[_CellValue] = None) -> None:
+        if style_override is not None and style_override.append:
+            PptxAdapter._append_run_to_text_frame(text_frame, text, style_override)
+            return
+        PptxAdapter._set_text_frame_text_preserving_style(text_frame, text, style_override)
 
     @staticmethod
     def _remove_shape(shape) -> None:
@@ -928,6 +936,13 @@ class PptxAdapter:
                 pass
         if style_override is not None:
             PptxAdapter._apply_text_style_override(font, style_override)
+
+    @staticmethod
+    def _append_run_to_text_frame(text_frame, text: str, style_override: _CellValue) -> None:
+        paragraph = text_frame.paragraphs[0] if text_frame.paragraphs else text_frame.add_paragraph()
+        run = paragraph.add_run()
+        run.text = text
+        PptxAdapter._apply_text_style_override(run.font, style_override)
 
     @staticmethod
     def _apply_text_style_override(font, style: _CellValue) -> None:

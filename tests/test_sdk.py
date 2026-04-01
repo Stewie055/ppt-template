@@ -701,6 +701,7 @@ def test_table_content_can_override_cell_font_style(tmp_path: Path):
     assert target_run.font.bold is True
     assert target_run.font.color.rgb == RGBColor(0xFF, 0x00, 0x00)
     assert target_run.font.name is None
+    assert target_run.font.size == Pt(12)
 
 
 def test_table_cells_content_can_override_partial_cell_font_style(tmp_path: Path):
@@ -732,3 +733,38 @@ def test_table_cells_content_can_override_partial_cell_font_style(tmp_path: Path
     assert shape.table.cell(1, 1).text == "中"
     assert target_run.font.italic is True
     assert target_run.font.color.rgb == RGBColor(0x00, 0xAA, 0x00)
+    assert target_run.font.size == Pt(12)
+
+
+def test_table_cells_content_append_adds_new_run(tmp_path: Path):
+    template_path = tmp_path / "append-table.pptx"
+    output_path = tmp_path / "append-table-out.pptx"
+    _build_native_table_placeholder_template(template_path)
+
+    registry = RendererRegistry()
+    registry.register_func(
+        "risk_table",
+        lambda placeholder, context: TableCellsContent(
+            cells={
+                (1, 1): cell(" +高", color="FF0000", bold=True, append=True)
+            }
+        ),
+    )
+
+    PptTemplateEngine(registry).render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=RenderContext(data={}),
+    )
+
+    rendered = Presentation(str(output_path))
+    shape = next(shape for shape in rendered.slides[0].shapes if getattr(shape, "name", None) == "ph:table:risk_table")
+    paragraph = shape.table.cell(1, 1).text_frame.paragraphs[0]
+    appended_run = paragraph.runs[-1]
+
+    assert shape.table.cell(1, 1).text == "旧值 +高"
+    assert len(paragraph.runs) >= 2
+    assert appended_run.text == " +高"
+    assert appended_run.font.bold is True
+    assert appended_run.font.color.rgb == RGBColor(0xFF, 0x00, 0x00)
+    assert appended_run.font.size == Pt(12)
