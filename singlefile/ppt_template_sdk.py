@@ -471,7 +471,8 @@ class Placeholder:
             `image`、`table`、`chart`。
         key: 占位块业务 key，来自 `ph:<type>:<key>` 中的 `<key>`。
         slide_index: 占位块所在 slide 的 `0-based` 索引。
-        shape_id: 原始 shape id，常用于日志与后续操作定位。
+        shape_id: 原始 shape id，常用于日志与后续操作定位。该值不保证跨 slide
+            全局唯一，通常需要与 `slide_index` 组合使用。
         shape_name: 原始 `shape.name`。
         left: 占位区域左侧坐标。
         top: 占位区域顶部坐标。
@@ -1091,7 +1092,7 @@ class TextReplacer:
         self,
         presentation,
         context: RenderContext,
-        rendered_shape_ids: Optional[set[int]] = None,
+        rendered_shapes: Optional[set[tuple[int, int]]] = None,
         pattern: Optional[str] = None,
     ) -> TextReplaceResult:
         """对整个 Presentation 执行字段替换。
@@ -1099,7 +1100,7 @@ class TextReplacer:
         Args:
             presentation: `python-pptx` 的 `Presentation` 实例。
             context: 字段取值上下文。
-            rendered_shape_ids: 可选 shape id 集合；这些 shape 会被跳过。
+            rendered_shapes: 可选 `(slide_index, shape_id)` 集合；这些 shape 会被跳过。
             pattern: 本次调用临时覆盖的匹配正则。
 
         Returns:
@@ -1119,13 +1120,14 @@ class TextReplacer:
         """
 
         field_re = re.compile(pattern or self.pattern or r"\{\{([\w\.]+)\}\}")
-        rendered_shape_ids = rendered_shape_ids or set()
+        rendered_shapes = rendered_shapes or set()
         warnings: list[str] = []
         replaced_count = 0
         try:
-            for slide in presentation.slides:
+            for slide_index, slide in enumerate(presentation.slides):
                 for shape in iter_shapes(slide.shapes):
-                    if getattr(shape, "shape_id", None) in rendered_shape_ids:
+                    shape_marker = (slide_index, getattr(shape, "shape_id", None))
+                    if shape_marker in rendered_shapes:
                         continue
                     if getattr(shape, "has_text_frame", False):
                         new_text, count = self._replace_text(shape.text_frame.text, field_re, context, warnings)
@@ -1253,7 +1255,7 @@ class PptTemplateEngine:
         for placeholder in parsed.placeholders:
             placeholder_groups[placeholder.key].append(placeholder)
 
-        rendered_shape_ids: set[int] = set()
+        rendered_shapes: set[tuple[int, int]] = set()
         rendered_count = 0
         skipped_count = 0
         warnings: list[str] = []
@@ -1277,14 +1279,14 @@ class PptTemplateEngine:
                 )
             for placeholder in placeholders:
                 self.adapter.write_content(presentation, placeholder, content)
-                rendered_shape_ids.add(placeholder.shape_id)
+                rendered_shapes.add((placeholder.slide_index, placeholder.shape_id))
                 rendered_count += 1
 
         if self.options.enable_text_field_replace:
             replace_result = self.text_replacer.replace_presentation_text(
                 presentation,
                 context=context,
-                rendered_shape_ids=rendered_shape_ids,
+                rendered_shapes=rendered_shapes,
                 pattern=self.options.text_field_pattern,
             )
             warnings.extend(replace_result.warnings)

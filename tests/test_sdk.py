@@ -334,6 +334,47 @@ def test_text_replacer_public_api(tmp_path: Path):
     assert any("missing text field 'missing.value'" in warning for warning in result.warnings)
 
 
+def test_text_replacer_skip_tracking_uses_slide_index_and_shape_id():
+    class FakeTextFrame:
+        def __init__(self, text: str):
+            self.text = text
+
+    class FakeShape:
+        def __init__(self, shape_id: int, text: str):
+            self.shape_id = shape_id
+            self.has_text_frame = True
+            self.has_table = False
+            self.text_frame = FakeTextFrame(text)
+            self.text = text
+
+    class FakeSlide:
+        def __init__(self, shapes):
+            self.shapes = shapes
+
+    class FakePresentation:
+        def __init__(self, slides):
+            self.slides = slides
+
+    first_shape = FakeShape(7, "第一页 {{project.name}}")
+    second_shape = FakeShape(7, "第二页 {{project.name}}")
+    presentation = FakePresentation(
+        slides=[
+            FakeSlide([first_shape]),
+            FakeSlide([second_shape]),
+        ]
+    )
+
+    result = TextReplacer().replace_presentation_text(
+        presentation,
+        context=RenderContext(data={"project": {"name": "Aurora"}}),
+        rendered_shapes={(0, 7)},
+    )
+
+    assert first_shape.text == "第一页 {{project.name}}"
+    assert second_shape.text == "第二页 Aurora"
+    assert result.replaced_count == 1
+
+
 def test_operations_slide_and_section_flow(tmp_path: Path):
     prs = Presentation()
     for idx in range(3):
