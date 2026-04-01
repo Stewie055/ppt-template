@@ -7,7 +7,7 @@ name = "ppt-template-sdk"
 version = "0.1.0"
 description = "Reusable PPT template rendering SDK built on python-pptx"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 dependencies = [
     "python-pptx>=0.6.21",
 ]
@@ -18,10 +18,10 @@ dev = [
 ]
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+py-modules = ["ppt_template_sdk"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools.package-dir]
+"" = "singlefile"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

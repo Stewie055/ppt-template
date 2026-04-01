@@ -190,7 +190,7 @@ class OperationError(PptTemplateSdkError):
     """
 
 
-@dataclass(slots=True)
+@dataclass
 class RenderContext:
     """承载模板渲染和文本替换所需的业务上下文。
 
@@ -274,7 +274,7 @@ class RenderContext:
         return default
 
 
-@dataclass(slots=True)
+@dataclass
 class EngineOptions:
     """控制渲染引擎行为的配置对象。
 
@@ -301,7 +301,7 @@ class Content:
     """
 
 
-@dataclass(slots=True)
+@dataclass
 class TextContent(Content):
     """文本占位块的渲染结果。
 
@@ -317,7 +317,7 @@ class TextContent(Content):
     text: str
 
 
-@dataclass(slots=True)
+@dataclass
 class ImageContent(Content):
     """图片占位块的渲染结果。
 
@@ -333,7 +333,7 @@ class ImageContent(Content):
     image_path: str
 
 
-@dataclass(slots=True)
+@dataclass
 class TableContent(Content):
     """整表替换用的表格渲染结果。
 
@@ -354,7 +354,7 @@ class TableContent(Content):
     rows: list[list[str]]
 
 
-@dataclass(slots=True)
+@dataclass
 class TableCellsContent(Content):
     """局部更新表格 cell 的渲染结果。
 
@@ -373,7 +373,7 @@ class TableCellsContent(Content):
     cells: dict[tuple[int, int], str]
 
 
-@dataclass(slots=True)
+@dataclass
 class ChartContent(Content):
     """图表占位块的渲染结果。
 
@@ -386,7 +386,7 @@ class ChartContent(Content):
     image_path: str
 
 
-@dataclass(slots=True)
+@dataclass
 class Placeholder:
     """模板占位块的标准化描述对象。
 
@@ -426,7 +426,7 @@ class Placeholder:
     shape: Any
 
 
-@dataclass(slots=True)
+@dataclass
 class RenderResult:
     """一次模板渲染的结构化返回结果。
 
@@ -447,7 +447,7 @@ class RenderResult:
     warnings: list[str] = field(default_factory=list)
 
 
-@dataclass(slots=True)
+@dataclass
 class ValidationReport:
     """静态模板校验结果。
 
@@ -466,7 +466,7 @@ class ValidationReport:
     unused_renderers: list[str] = field(default_factory=list)
 
 
-@dataclass(slots=True)
+@dataclass
 class TextReplaceResult:
     """独立文本替换操作的返回结果。
 
@@ -843,7 +843,7 @@ class PptxAdapter:
                 pass
 
 
-@dataclass(slots=True)
+@dataclass
 class ParsedTemplate:
     placeholders: list[Placeholder] = field(default_factory=list)
     invalid_placeholders: list[str] = field(default_factory=list)

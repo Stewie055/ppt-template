@@ -10,7 +10,7 @@ pip install -e .[dev]
 
 要求：
 
-- Python `>= 3.10`
+- Python `>= 3.9`
 - 依赖 `python-pptx`
 
 ## 能力概览
@@ -199,7 +199,7 @@ ops.save_to_path("examples/output/operations_output.pptx")
 
 ## 单文件版本
 
-仓库额外提供一个真正独立的单文件版本：
+仓库当前只维护单文件版本：
 
 - [`singlefile/ppt_template_sdk.py`](singlefile/ppt_template_sdk.py)
 
@@ -207,6 +207,7 @@ ops.save_to_path("examples/output/operations_output.pptx")
 
 - 不想把整个包结构带进业务仓库
 - 希望像 `bottle.py` 一样直接复制一个文件使用
+- 需要把 `ppt_template_sdk.py` 当作唯一源码入口维护
 
 使用方式：
 

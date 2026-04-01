@@ -15,7 +15,12 @@ from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches
 from pptx.util import Pt
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT / "singlefile") not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT / "singlefile"))
+
 from ppt_template_sdk import (
+    BaseRenderer,
     ChartContent,
     ContentTypeMismatchError,
     DuplicatePlaceholderError,
@@ -30,7 +35,6 @@ from ppt_template_sdk import (
     TextReplacer,
     TextContent,
 )
-from ppt_template_sdk.registry import BaseRenderer
 
 
 PNG_1X1 = base64.b64decode(
@@ -39,7 +43,7 @@ PNG_1X1 = base64.b64decode(
 
 
 def _load_singlefile_module():
-    module_path = Path(__file__).resolve().parents[1] / "singlefile" / "ppt_template_sdk.py"
+    module_path = PROJECT_ROOT / "singlefile" / "ppt_template_sdk.py"
     spec = importlib.util.spec_from_file_location("ppt_template_sdk_single", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
