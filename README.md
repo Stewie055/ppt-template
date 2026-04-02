@@ -152,6 +152,18 @@ registry.register_func("title", render_label, prefix="标题：")
 registry.register_func("subtitle", render_label, prefix="副标题：")
 ```
 
+文本占位块如果需要写入可点击链接，可以直接返回：
+
+```python
+registry.register_func(
+    "report_link",
+    lambda placeholder, context: TextContent(
+        text=context.get_value("report.url"),
+        hyperlink_url=context.get_value("report.url"),
+    ),
+)
+```
+
 局部更新原生表格 cell 时，renderer 可以直接返回坐标字典：
 
 ```python
@@ -181,6 +193,7 @@ ops.save_to_path("examples/output/operations_output.pptx")
 - `duplicate_key_policy` 默认是 `broadcast`
 - 文本缺失字段会替换为空串，并记录 warning
 - `text` placeholder 会保留原文本框格式，并继承原 placeholder 首段首 run 的主样式
+- `TextContent(hyperlink_url=...)` 可在写回文本时同步设置可点击超链接
 - 原生 `table` placeholder 会原位写回，保留列宽、行高和单元格样式
 - 原生 `table` placeholder 与返回表格尺寸不一致时会直接报错
 - 若只想更新原生表格中的部分 cell，使用 `TableCellsContent` 或 `patch_table_cells()`
