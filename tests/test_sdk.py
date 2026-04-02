@@ -118,6 +118,56 @@ def _build_styled_text_template(path: Path) -> None:
     prs.save(path)
 
 
+def _build_styled_field_text_template(path: Path) -> None:
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+    paragraph = shape.text_frame.paragraphs[0]
+    paragraph.alignment = PP_ALIGN.CENTER
+    run = paragraph.add_run()
+    run.text = "项目：{{project.name}}"
+    run.font.name = "Arial"
+    run.font.size = Pt(24)
+    run.font.bold = True
+    run.font.italic = True
+    run.font.color.rgb = RGBColor(0x11, 0x22, 0x33)
+    prs.save(path)
+
+
+def _build_split_field_text_template(path: Path) -> None:
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(1))
+    paragraph = shape.text_frame.paragraphs[0]
+    first = paragraph.add_run()
+    first.text = "项目：{{project."
+    first.font.name = "Arial"
+    first.font.size = Pt(24)
+    first.font.bold = True
+    second = paragraph.add_run()
+    second.text = "name}}"
+    second.font.name = "Calibri"
+    second.font.size = Pt(18)
+    second.font.italic = True
+    prs.save(path)
+
+
+def _build_styled_field_table_template(path: Path) -> None:
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_table(1, 1, Inches(1), Inches(1), Inches(4), Inches(1.2))
+    table = shape.table
+    paragraph = table.cell(0, 0).text_frame.paragraphs[0]
+    paragraph.alignment = PP_ALIGN.CENTER
+    run = paragraph.add_run()
+    run.text = "负责人：{{owner.name}}"
+    run.font.name = "Arial"
+    run.font.size = Pt(20)
+    run.font.bold = True
+    run.font.color.rgb = RGBColor(0x44, 0x55, 0x66)
+    prs.save(path)
+
+
 def _build_native_table_placeholder_template(path: Path) -> None:
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[6])
@@ -216,6 +266,32 @@ def test_render_from_bytes(tmp_path: Path):
 
     assert result.success is True
     assert isinstance(result.output_bytes, bytes)
+
+
+def test_text_content_can_apply_hyperlink(tmp_path: Path):
+    template_path = tmp_path / "styled-link-template.pptx"
+    _build_styled_text_template(template_path)
+
+    registry = RendererRegistry()
+    registry.register_func(
+        "title",
+        lambda placeholder, context: TextContent(
+            text="查看鱼骨详情",
+            hyperlink_url="https://example.com/fishbones/fb-1",
+        ),
+    )
+
+    engine = PptTemplateEngine(registry)
+    result = engine.render(template_path=str(template_path), context=RenderContext(data={}))
+
+    assert result.success is True
+    assert result.output_bytes is not None
+
+    presentation = Presentation(BytesIO(result.output_bytes))
+    shape = next(shape for shape in presentation.slides[0].shapes if getattr(shape, "has_text_frame", False))
+    run = shape.text_frame.paragraphs[0].runs[0]
+    assert shape.text == "查看鱼骨详情"
+    assert run.hyperlink.address == "https://example.com/fishbones/fb-1"
 
 
 def test_validate_reports_static_issues(tmp_path: Path):
@@ -334,10 +410,113 @@ def test_text_replacer_public_api(tmp_path: Path):
     assert any("missing text field 'missing.value'" in warning for warning in result.warnings)
 
 
+def test_text_replacer_skips_writeback_when_no_fields_exist(tmp_path: Path):
+    template_path = tmp_path / "styled-no-fields.pptx"
+    _build_styled_text_template(template_path)
+
+    prs = Presentation(str(template_path))
+    result = TextReplacer().replace_presentation_text(
+        prs,
+        context=RenderContext(data={"project": {"name": "Aurora"}}),
+    )
+
+    shape = next(shape for shape in prs.slides[0].shapes if getattr(shape, "has_text_frame", False))
+    paragraph = shape.text_frame.paragraphs[0]
+    run = paragraph.runs[0]
+
+    assert result.replaced_count == 0
+    assert shape.text == "placeholder"
+    assert paragraph.alignment == PP_ALIGN.CENTER
+    assert run.font.name == "Arial"
+    assert run.font.size == Pt(24)
+    assert run.font.bold is True
+    assert run.font.italic is True
+    assert run.font.color.rgb == RGBColor(0x11, 0x22, 0x33)
+
+
+def test_text_replacer_preserves_style_for_single_run_field(tmp_path: Path):
+    template_path = tmp_path / "styled-field.pptx"
+    _build_styled_field_text_template(template_path)
+
+    prs = Presentation(str(template_path))
+    result = TextReplacer().replace_presentation_text(
+        prs,
+        context=RenderContext(data={"project": {"name": "Aurora"}}),
+    )
+
+    shape = next(shape for shape in prs.slides[0].shapes if getattr(shape, "has_text_frame", False))
+    paragraph = shape.text_frame.paragraphs[0]
+    run = paragraph.runs[0]
+
+    assert result.replaced_count == 1
+    assert shape.text == "项目：Aurora"
+    assert paragraph.alignment == PP_ALIGN.CENTER
+    assert run.font.name == "Arial"
+    assert run.font.size == Pt(24)
+    assert run.font.bold is True
+    assert run.font.italic is True
+    assert run.font.color.rgb == RGBColor(0x11, 0x22, 0x33)
+
+
+def test_text_replacer_warns_when_field_spans_multiple_runs(tmp_path: Path):
+    template_path = tmp_path / "split-field.pptx"
+    _build_split_field_text_template(template_path)
+
+    prs = Presentation(str(template_path))
+    result = TextReplacer().replace_presentation_text(
+        prs,
+        context=RenderContext(data={"project": {"name": "Aurora"}}),
+    )
+
+    shape = next(shape for shape in prs.slides[0].shapes if getattr(shape, "has_text_frame", False))
+    paragraph = shape.text_frame.paragraphs[0]
+
+    assert result.replaced_count == 0
+    assert shape.text == "项目：{{project.name}}"
+    assert paragraph.runs[0].text == "项目：{{project."
+    assert paragraph.runs[1].text == "name}}"
+    assert any("text field 'project.name' spans multiple runs or paragraphs and was not replaced" in warning for warning in result.warnings)
+
+
+def test_text_replacer_preserves_table_cell_style_for_single_run_field(tmp_path: Path):
+    template_path = tmp_path / "styled-field-table.pptx"
+    _build_styled_field_table_template(template_path)
+
+    prs = Presentation(str(template_path))
+    result = TextReplacer().replace_presentation_text(
+        prs,
+        context=RenderContext(data={"owner": {"name": "Bob"}}),
+    )
+
+    cell = prs.slides[0].shapes[0].table.cell(0, 0)
+    paragraph = cell.text_frame.paragraphs[0]
+    run = paragraph.runs[0]
+
+    assert result.replaced_count == 1
+    assert cell.text == "负责人：Bob"
+    assert paragraph.alignment == PP_ALIGN.CENTER
+    assert run.font.name == "Arial"
+    assert run.font.size == Pt(20)
+    assert run.font.bold is True
+    assert run.font.color.rgb == RGBColor(0x44, 0x55, 0x66)
+
+
 def test_text_replacer_skip_tracking_uses_slide_index_and_shape_id():
     class FakeTextFrame:
         def __init__(self, text: str):
+            self.paragraphs = [FakeParagraph(text)]
+
+        @property
+        def text(self) -> str:
+            return "".join(run.text for run in self.paragraphs[0].runs)
+
+    class FakeRun:
+        def __init__(self, text: str):
             self.text = text
+
+    class FakeParagraph:
+        def __init__(self, text: str):
+            self.runs = [FakeRun(text)]
 
     class FakeShape:
         def __init__(self, shape_id: int, text: str):
@@ -345,7 +524,10 @@ def test_text_replacer_skip_tracking_uses_slide_index_and_shape_id():
             self.has_text_frame = True
             self.has_table = False
             self.text_frame = FakeTextFrame(text)
-            self.text = text
+
+        @property
+        def text(self) -> str:
+            return self.text_frame.text
 
     class FakeSlide:
         def __init__(self, shapes):

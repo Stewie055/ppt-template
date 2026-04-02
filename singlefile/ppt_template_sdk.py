@@ -315,6 +315,7 @@ class TextContent(Content):
 
     Args:
         text: 要写回到目标文本 shape 的完整字符串。
+        hyperlink_url: 可选超链接地址。传入后，SDK 会在生成的文本 run 上设置链接。
 
     Example:
         ```python
@@ -323,6 +324,7 @@ class TextContent(Content):
     """
 
     text: str
+    hyperlink_url: Optional[str] = None
 
 
 @dataclass
@@ -777,7 +779,11 @@ class PptxAdapter:
         if isinstance(content, TextContent):
             if not getattr(shape, "has_text_frame", False):
                 raise ShapeOperationError(f"shape '{placeholder.shape_name}' cannot accept text content")
-            PptxAdapter._set_text_frame_text_preserving_style(shape.text_frame, content.text)
+            PptxAdapter._set_text_frame_text_preserving_style(
+                shape.text_frame,
+                content.text,
+                hyperlink_url=content.hyperlink_url,
+            )
             return
         if isinstance(content, (ImageContent, ChartContent)):
             slide.shapes.add_picture(content.image_path, placeholder.left, placeholder.top, placeholder.width, placeholder.height)
@@ -906,6 +912,7 @@ class PptxAdapter:
         text_frame,
         text: str,
         style_override: Optional[_CellValue] = None,
+        hyperlink_url: Optional[str] = None,
     ) -> None:
         style = PptxAdapter._capture_text_style(text_frame)
         text_frame.clear()
@@ -940,6 +947,11 @@ class PptxAdapter:
                 pass
         if style_override is not None:
             PptxAdapter._apply_text_style_override(font, style_override)
+        if hyperlink_url:
+            try:
+                run.hyperlink.address = hyperlink_url
+            except Exception as exc:
+                raise ShapeOperationError("failed to apply hyperlink to text content") from exc
 
     @staticmethod
     def _append_run_to_text_frame(text_frame, text: str, style_override: _CellValue) -> None:
@@ -1130,14 +1142,12 @@ class TextReplacer:
                     if shape_marker in rendered_shapes:
                         continue
                     if getattr(shape, "has_text_frame", False):
-                        new_text, count = self._replace_text(shape.text_frame.text, field_re, context, warnings)
-                        shape.text = new_text
+                        count = self._replace_text_frame(shape.text_frame, field_re, context, warnings)
                         replaced_count += count
                     if getattr(shape, "has_table", False):
                         for row in shape.table.rows:
                             for cell in row.cells:
-                                new_text, count = self._replace_text(cell.text, field_re, context, warnings)
-                                cell.text = new_text
+                                count = self._replace_text_frame(cell.text_frame, field_re, context, warnings)
                                 replaced_count += count
         except Exception as exc:
             raise FieldReplaceError(str(exc)) from exc
@@ -1159,6 +1169,29 @@ class TextReplacer:
             return str(value)
 
         return field_re.sub(repl, text), replacements
+
+    @staticmethod
+    def _replace_text_frame(text_frame, field_re, context: RenderContext, warnings: list[str]) -> int:
+        full_text = getattr(text_frame, "text", "") or ""
+        frame_paths = set(field_re.findall(full_text))
+        run_paths: set[str] = set()
+        replaced_count = 0
+
+        for paragraph in getattr(text_frame, "paragraphs", []):
+            for run in getattr(paragraph, "runs", []):
+                run_text = getattr(run, "text", "") or ""
+                matched_paths = field_re.findall(run_text)
+                if matched_paths:
+                    run_paths.update(matched_paths)
+                new_text, count = TextReplacer._replace_text(run_text, field_re, context, warnings)
+                if count:
+                    run.text = new_text
+                    replaced_count += count
+
+        for path in sorted(frame_paths - run_paths):
+            warnings.append(f"text field '{path}' spans multiple runs or paragraphs and was not replaced")
+
+        return replaced_count
 
 
 CONTENT_TYPE_MAP = {
