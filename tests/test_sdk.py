@@ -101,6 +101,46 @@ def _build_dual_text_template(path: Path) -> None:
     prs.save(path)
 
 
+def _build_repeat_section_template(path: Path) -> None:
+    prs = Presentation()
+    for text in ["cover", "detail-title", "detail-summary", "ending"]:
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        shape = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(5), Inches(1))
+        shape.text = text
+
+    prs.slides[0].shapes[0].name = "ph:text:cover_title"
+    prs.slides[1].shapes[0].name = "ph:text:item_title"
+    prs.slides[2].shapes[0].name = "ph:text:item_summary"
+    prs.slides[3].shapes[0].name = "ph:text:ending_title"
+    prs.save(path)
+
+    ops = PptOperations.load(template_path=str(path))
+    ops.add_section("Detail", 1)
+    ops.add_section("Ending", 3)
+    ops.save_to_path(str(path))
+
+
+def _build_multi_repeat_section_template(path: Path) -> None:
+    prs = Presentation()
+    for text in ["cover", "detail-title", "detail-summary", "appendix-note", "ending"]:
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        shape = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(5), Inches(1))
+        shape.text = text
+
+    prs.slides[0].shapes[0].name = "ph:text:cover_title"
+    prs.slides[1].shapes[0].name = "ph:text:item_title"
+    prs.slides[2].shapes[0].name = "ph:text:item_summary"
+    prs.slides[3].shapes[0].name = "ph:text:appendix_note"
+    prs.slides[4].shapes[0].name = "ph:text:ending_title"
+    prs.save(path)
+
+    ops = PptOperations.load(template_path=str(path))
+    ops.add_section("Detail", 1)
+    ops.add_section("Appendix", 3)
+    ops.add_section("Ending", 4)
+    ops.save_to_path(str(path))
+
+
 def _build_styled_text_template(path: Path) -> None:
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[6])
@@ -647,6 +687,117 @@ def test_engine_render_can_apply_operations_builder_insert_slide(tmp_path: Path)
     slide1_texts = [shape.text for shape in rendered.slides[1].shapes if getattr(shape, "has_text_frame", False)]
     assert slide0_texts == ["slide-0"]
     assert slide1_texts == []
+
+
+def test_engine_render_can_repeat_section_for_multiple_batches(tmp_path: Path):
+    template_path = tmp_path / "repeat-section-template.pptx"
+    output_path = tmp_path / "repeat-section-out.pptx"
+    _build_repeat_section_template(template_path)
+
+    registry = RendererRegistry()
+    registry.register_func("cover_title", lambda placeholder, context: TextContent(text=context.extras["report_title"]))
+    registry.register_func("item_title", lambda placeholder, context: TextContent(text=context.get_value("title")))
+    registry.register_func("item_summary", lambda placeholder, context: TextContent(text=context.get_value("summary")))
+    registry.register_func("ending_title", lambda placeholder, context: TextContent(text=f"END:{context.extras['report_title']}"))
+
+    result = PptTemplateEngine(registry).render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=RenderContext(data={"unused": True}, extras={"report_title": "Q1"}),
+        section_batches={
+            "Detail": [
+                {"title": "批次A", "summary": "摘要A"},
+                {"title": "批次B", "summary": "摘要B"},
+            ]
+        },
+    )
+
+    assert result.success is True
+    rendered = Presentation(str(output_path))
+    assert len(rendered.slides) == 6
+    texts = [
+        shape.text
+        for slide in rendered.slides
+        for shape in slide.shapes
+        if getattr(shape, "has_text_frame", False)
+    ]
+    assert texts == ["Q1", "批次A", "摘要A", "批次B", "摘要B", "END:Q1"]
+
+    with ZipFile(output_path) as zf:
+        presentation_xml = zf.read("ppt/presentation.xml").decode("utf-8")
+    assert 'name="Detail"' in presentation_xml
+    assert presentation_xml.count("<p:sldId ") == 6
+
+
+def test_engine_render_can_remove_repeated_section_when_batches_empty(tmp_path: Path):
+    template_path = tmp_path / "repeat-section-empty-template.pptx"
+    output_path = tmp_path / "repeat-section-empty-out.pptx"
+    _build_repeat_section_template(template_path)
+
+    registry = RendererRegistry()
+    registry.register_func("cover_title", lambda placeholder, context: TextContent(text=context.extras["report_title"]))
+    registry.register_func("item_title", lambda placeholder, context: TextContent(text=context.get_value("title", "")))
+    registry.register_func("item_summary", lambda placeholder, context: TextContent(text=context.get_value("summary", "")))
+    registry.register_func("ending_title", lambda placeholder, context: TextContent(text=f"END:{context.extras['report_title']}"))
+
+    result = PptTemplateEngine(registry).render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=RenderContext(data={}, extras={"report_title": "Q1"}),
+        section_batches={"Detail": []},
+    )
+
+    assert result.success is True
+    rendered = Presentation(str(output_path))
+    assert len(rendered.slides) == 2
+    texts = [
+        shape.text
+        for slide in rendered.slides
+        for shape in slide.shapes
+        if getattr(shape, "has_text_frame", False)
+    ]
+    assert texts == ["Q1", "END:Q1"]
+
+
+def test_engine_render_can_repeat_multiple_sections_with_distinct_batches(tmp_path: Path):
+    template_path = tmp_path / "multi-repeat-template.pptx"
+    output_path = tmp_path / "multi-repeat-out.pptx"
+    _build_multi_repeat_section_template(template_path)
+
+    registry = RendererRegistry()
+    registry.register_func("cover_title", lambda placeholder, context: TextContent(text=context.extras["report_title"]))
+    registry.register_func("item_title", lambda placeholder, context: TextContent(text=context.get_value("title")))
+    registry.register_func("item_summary", lambda placeholder, context: TextContent(text=context.get_value("summary")))
+    registry.register_func("appendix_note", lambda placeholder, context: TextContent(text=context.get_value("note")))
+    registry.register_func("ending_title", lambda placeholder, context: TextContent(text=f"END:{context.extras['report_title']}"))
+
+    result = PptTemplateEngine(registry).render(
+        template_path=str(template_path),
+        output_path=str(output_path),
+        context=RenderContext(data={}, extras={"report_title": "Q1"}),
+        section_batches={
+            "Detail": [
+                {"title": "批次A", "summary": "摘要A"},
+                {"title": "批次B", "summary": "摘要B"},
+            ],
+            "Appendix": [
+                {"note": "附录1"},
+                {"note": "附录2"},
+                {"note": "附录3"},
+            ],
+        },
+    )
+
+    assert result.success is True
+    rendered = Presentation(str(output_path))
+    assert len(rendered.slides) == 9
+    texts = [
+        shape.text
+        for slide in rendered.slides
+        for shape in slide.shapes
+        if getattr(shape, "has_text_frame", False)
+    ]
+    assert texts == ["Q1", "批次A", "摘要A", "批次B", "摘要B", "附录1", "附录2", "附录3", "END:Q1"]
 
 
 def test_operations_table_row_column_and_merge(tmp_path: Path):

@@ -111,6 +111,7 @@ Notes:
 
 from __future__ import annotations
 
+from copy import deepcopy
 import re
 import uuid
 from collections import Counter, defaultdict
@@ -1106,6 +1107,7 @@ class TextReplacer:
         context: RenderContext,
         rendered_shapes: Optional[set[tuple[int, int]]] = None,
         pattern: Optional[str] = None,
+        allowed_slide_indexes: Optional[set[int]] = None,
     ) -> TextReplaceResult:
         """对整个 Presentation 执行字段替换。
 
@@ -1114,6 +1116,7 @@ class TextReplacer:
             context: 字段取值上下文。
             rendered_shapes: 可选 `(slide_index, shape_id)` 集合；这些 shape 会被跳过。
             pattern: 本次调用临时覆盖的匹配正则。
+            allowed_slide_indexes: 可选 slide 索引集合；传入后仅处理这些 slides。
 
         Returns:
             `TextReplaceResult`，包含替换次数与 warning 列表。
@@ -1137,6 +1140,8 @@ class TextReplacer:
         replaced_count = 0
         try:
             for slide_index, slide in enumerate(presentation.slides):
+                if allowed_slide_indexes is not None and slide_index not in allowed_slide_indexes:
+                    continue
                 for shape in iter_shapes(slide.shapes):
                     shape_marker = (slide_index, getattr(shape, "shape_id", None))
                     if shape_marker in rendered_shapes:
@@ -1235,6 +1240,7 @@ class PptTemplateEngine:
         template_bytes: Optional[bytes] = None,
         output_path: Optional[str] = None,
         context: Optional[RenderContext] = None,
+        section_batches: Optional[dict[str, Any]] = None,
         operations_builder: Optional[Callable[[Any, RenderContext], None]] = None,
     ) -> RenderResult:
         """执行模板渲染。
@@ -1255,6 +1261,9 @@ class PptTemplateEngine:
             template_bytes: 模板字节流，与 `template_path` 二选一。
             output_path: 可选输出路径；传入后会在返回 bytes 的同时落盘。
             context: 渲染上下文；为空时使用空上下文。
+            section_batches: 可选 section 批次映射。key 为模板 section 名称，
+                value 为该 section 需要展开的批次数据列表。每一批渲染时会用当前
+                批次数据覆盖 `context.data`。
             operations_builder: 可选后处理回调。回调会在渲染和文本替换完成后
                 收到 `PptOperations` 与 `RenderContext`，用于根据外部参数决定删页、
                 插页等结构操作。
@@ -1283,10 +1292,47 @@ class PptTemplateEngine:
         parsed = parse_presentation(presentation, self.options.text_field_pattern)
         if parsed.invalid_placeholders:
             raise PlaceholderFormatError(parsed.invalid_placeholders[0])
+        if section_batches:
+            rendered_count, skipped_count, warnings = self._render_with_section_batches(
+                presentation,
+                context,
+                section_batches,
+            )
+        else:
+            rendered_count, skipped_count, warnings = self._render_slide_subset(
+                presentation,
+                context,
+                set(range(len(presentation.slides))),
+            )
 
+        if operations_builder is not None:
+            operations = PptOperations(presentation, adapter=self.adapter)
+            operations_builder(operations, context)
+
+        output_bytes = self.adapter.save_to_bytes(presentation)
+        if output_path:
+            self.adapter.save_to_path(presentation, output_path)
+
+        return RenderResult(
+            success=True,
+            output_path=output_path,
+            output_bytes=output_bytes,
+            rendered_count=rendered_count,
+            skipped_count=skipped_count,
+            warnings=warnings,
+        )
+
+    def _render_slide_subset(
+        self,
+        presentation,
+        context: RenderContext,
+        allowed_slide_indexes: set[int],
+    ) -> tuple[int, int, list[str]]:
+        parsed = parse_presentation(presentation, self.options.text_field_pattern)
         placeholder_groups = defaultdict(list)
         for placeholder in parsed.placeholders:
-            placeholder_groups[placeholder.key].append(placeholder)
+            if placeholder.slide_index in allowed_slide_indexes:
+                placeholder_groups[placeholder.key].append(placeholder)
 
         rendered_shapes: set[tuple[int, int]] = set()
         rendered_count = 0
@@ -1315,31 +1361,100 @@ class PptTemplateEngine:
                 rendered_shapes.add((placeholder.slide_index, placeholder.shape_id))
                 rendered_count += 1
 
-        if self.options.enable_text_field_replace:
+        if self.options.enable_text_field_replace and allowed_slide_indexes:
             replace_result = self.text_replacer.replace_presentation_text(
                 presentation,
                 context=context,
                 rendered_shapes=rendered_shapes,
                 pattern=self.options.text_field_pattern,
+                allowed_slide_indexes=allowed_slide_indexes,
             )
             warnings.extend(replace_result.warnings)
 
-        if operations_builder is not None:
-            operations = PptOperations(presentation, adapter=self.adapter)
-            operations_builder(operations, context)
+        return rendered_count, skipped_count, warnings
 
-        output_bytes = self.adapter.save_to_bytes(presentation)
-        if output_path:
-            self.adapter.save_to_path(presentation, output_path)
+    def _render_with_section_batches(
+        self,
+        presentation,
+        context: RenderContext,
+        section_batches: dict[str, Any],
+    ) -> tuple[int, int, list[str]]:
+        operations = PptOperations(presentation, adapter=self.adapter)
+        groups = operations._read_sections()
+        if not groups:
+            raise OperationError("section_batches requires template sections")
 
-        return RenderResult(
-            success=True,
-            output_path=output_path,
-            output_bytes=output_bytes,
-            rendered_count=rendered_count,
-            skipped_count=skipped_count,
-            warnings=warnings,
-        )
+        batches_by_name = {name: list(batches) for name, batches in section_batches.items()}
+        grouped_by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for group in groups:
+            grouped_by_name[group["name"]].append(group)
+
+        for name in batches_by_name:
+            matched_groups = grouped_by_name.get(name)
+            if not matched_groups:
+                raise OperationError(f"section '{name}' not found")
+            if len(matched_groups) > 1:
+                raise OperationError(f"section name '{name}' must be unique when used in section_batches")
+
+        rendered_count = 0
+        skipped_count = 0
+        warnings: list[str] = []
+        final_groups: list[dict[str, Any]] = []
+
+        for group in groups:
+            section_name = group["name"]
+            source_slide_ids = list(group["slide_ids"])
+            if section_name not in batches_by_name:
+                slide_indexes = {operations._slide_index_for_id(slide_id) for slide_id in source_slide_ids}
+                current_rendered, current_skipped, current_warnings = self._render_slide_subset(
+                    presentation,
+                    context,
+                    slide_indexes,
+                )
+                rendered_count += current_rendered
+                skipped_count += current_skipped
+                warnings.extend(current_warnings)
+                final_groups.append(group)
+                continue
+
+            batches = batches_by_name[section_name]
+            if not batches:
+                for slide_id in reversed(source_slide_ids):
+                    operations.delete_slide(operations._slide_index_for_id(slide_id))
+                continue
+
+            batch_slide_ids: list[list[int]] = [source_slide_ids]
+            insert_at = operations._slide_index_for_id(source_slide_ids[-1]) + 1
+            for _ in batches[1:]:
+                cloned_ids: list[int] = []
+                for source_slide_id in source_slide_ids:
+                    cloned_slide = operations._clone_slide(operations._slide_index_for_id(source_slide_id), insert_at)
+                    cloned_ids.append(cloned_slide.slide_id)
+                    insert_at += 1
+                batch_slide_ids.append(cloned_ids)
+
+            for batch_data, slide_ids in zip(batches, batch_slide_ids):
+                batch_context = RenderContext(data=batch_data, extras=context.extras)
+                slide_indexes = {operations._slide_index_for_id(slide_id) for slide_id in slide_ids}
+                current_rendered, current_skipped, current_warnings = self._render_slide_subset(
+                    presentation,
+                    batch_context,
+                    slide_indexes,
+                )
+                rendered_count += current_rendered
+                skipped_count += current_skipped
+                warnings.extend(current_warnings)
+
+            final_groups.append(
+                {
+                    "name": group["name"],
+                    "id": group["id"],
+                    "slide_ids": [slide_id for batch_ids in batch_slide_ids for slide_id in batch_ids],
+                }
+            )
+
+        operations._write_sections(final_groups)
+        return rendered_count, skipped_count, warnings
 
     def validate(
         self,
@@ -1497,6 +1612,31 @@ class PptOperations:
                 groups[target_group]["slide_ids"].insert(anchor_pos, slide_id)
             self._write_sections(groups)
         return slide
+
+    def _clone_slide(self, source_index: int, target_index: int):
+        source_slide = self.adapter.get_slide(self.presentation, source_index)
+        if target_index < 0 or target_index > len(self.presentation.slides):
+            raise OperationError(f"target_index {target_index} out of range")
+
+        cloned_slide = self.presentation.slides.add_slide(source_slide.slide_layout)
+        for shape in list(cloned_slide.shapes):
+            self.adapter._remove_shape(shape)
+
+        for shape in source_slide.shapes:
+            cloned_slide.shapes._spTree.insert_element_before(deepcopy(shape.element), "p:extLst")
+
+        for rel in source_slide.part.rels.values():
+            if "notesSlide" in rel.reltype or "slideLayout" in rel.reltype:
+                continue
+            if rel.is_external:
+                cloned_slide.part.rels.add_relationship(rel.reltype, rel.target_ref, rel.rId, True)
+            else:
+                cloned_slide.part.rels.add_relationship(rel.reltype, rel._target, rel.rId)
+
+        slide_id_el = self.presentation.slides._sldIdLst[-1]
+        self.presentation.slides._sldIdLst.remove(slide_id_el)
+        self.presentation.slides._sldIdLst.insert(target_index, slide_id_el)
+        return cloned_slide
 
     def add_section(self, name: str, start_slide_index: int) -> None:
         """在指定 slide 位置开始一个新的 section。
@@ -1690,6 +1830,12 @@ class PptOperations:
 
     def _slide_ids_in_order(self) -> list[int]:
         return [slide.slide_id for slide in self.presentation.slides]
+
+    def _slide_index_for_id(self, slide_id: int) -> int:
+        for index, slide in enumerate(self.presentation.slides):
+            if slide.slide_id == slide_id:
+                return index
+        raise OperationError(f"slide id {slide_id} not found")
 
     def _group_index_for_slide(self, groups: list[dict], slide_id: int) -> int:
         for index, group in enumerate(groups):
