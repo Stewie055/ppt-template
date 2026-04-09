@@ -20,6 +20,7 @@ pip install -e .[dev]
 - `RenderContext`：统一业务数据与扩展对象访问
 - `TextReplacer`：独立文本替换能力
 - `PptOperations`：PPT 结构与表格操作能力
+- `section_batches`：按 section 批量重复渲染 1-x 张模板页组
 - `validate()`：模板静态校验
 
 ## 模板协议
@@ -117,8 +118,35 @@ result = engine.render(
 
 ### `PptTemplateEngine`
 
-- `render(template_path|template_bytes, output_path=None, context=None) -> RenderResult`
+- `render(template_path|template_bytes, output_path=None, context=None, section_batches=None) -> RenderResult`
 - `validate(template_path|template_bytes) -> ValidationReport`
+
+当某个 section 需要按不固定批次重复展开时，可直接传 `section_batches`：
+
+```python
+result = engine.render(
+    template_path="examples/assets/report_template.pptx",
+    output_path="examples/output/report_output.pptx",
+    context=RenderContext(
+        data={"report_date": "2026-03-31"},
+        extras={"report_title": "Q1 经营分析"},
+    ),
+    section_batches={
+        "Detail": [
+            {"title": "批次A", "summary": "摘要A"},
+            {"title": "批次B", "summary": "摘要B"},
+        ]
+    },
+)
+```
+
+约定：
+
+- `section_batches` 的 key 是模板里的 section 名称
+- value 是该 section 的批次数据列表
+- 渲染某一批时，`context.data` 会切换为当前批数据
+- `context.extras` 保持不变，适合放全局参数
+- 模板中的原型 section 只作为母版，最终输出里会被批次结果替换
 
 ### `TextReplacer`
 

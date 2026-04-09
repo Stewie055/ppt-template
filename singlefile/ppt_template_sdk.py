@@ -47,6 +47,8 @@
 接口列表：
     PptTemplateEngine:
         模板渲染主入口。负责加载模板、解析 placeholder、调用 renderer、执行文本替换并输出 PPT。
+        当一份模板中存在“按批次重复展开”的 section 时，也通过 `render(..., section_batches=...)`
+        在同一个输出 PPT 中批量生成多组页面。
     RendererRegistry:
         管理 `key -> renderer` 的映射。注意它不是按 `type` 注册，而是按 `key` 注册。
     BaseRenderer:
@@ -73,6 +75,16 @@
     2. 在 Python 中用 `RendererRegistry` 为这个 `key` 注册 renderer。
     3. renderer 根据业务数据返回对应的 `Content`。
     4. 调用 `PptTemplateEngine.render()` 输出渲染后的 PPT。
+
+批量 section 渲染：
+    当模板里的某个 section 需要按不固定批次重复展开时：
+
+    1. 先在模板中用 section 划出这一组 1-x 张原型页。
+    2. 调用 `render(..., section_batches={"SectionName": [batch0, batch1, ...]})`。
+    3. SDK 会按批次复制该 section 的原型页组，并逐批渲染。
+    4. 渲染某一批时，`context.data` 会切换为当前批数据，`context.extras` 保持不变。
+
+    这适合“每批数据对应一组连续页面，但批次数量无法在模板里预先写死”的场景。
 
 Example:
     ```python

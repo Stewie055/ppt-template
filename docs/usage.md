@@ -146,6 +146,42 @@ result = engine.render(
 - `rendered_count`
 - `warnings`
 
+### 按 section 批量展开模板页组
+
+当一批业务数据需要占用 1-x 张连续模板页，且批次数量不固定时，可在模板里先用
+section 划出这组原型页，再通过 `section_batches` 批量展开：
+
+```python
+result = engine.render(
+    template_path="examples/assets/report_template.pptx",
+    output_path="examples/output/report_output.pptx",
+    context=RenderContext(
+        data={"report_date": "2026-03-31"},
+        extras={"report_title": "Q1 经营分析"},
+    ),
+    section_batches={
+        "Detail": [
+            {"title": "批次A", "summary": "摘要A"},
+            {"title": "批次B", "summary": "摘要B"},
+        ],
+        "Appendix": [
+            {"note": "附录1"},
+            {"note": "附录2"},
+        ],
+    },
+)
+```
+
+规则：
+
+- `section_batches` 的 key 是模板里的 section 名称
+- value 是该 section 的批次数据列表
+- 被绑定的 section 会在原位置按批次展开成多组页面
+- 渲染某一批时，`context.data` 会被当前批数据覆盖
+- `context.extras` 保持不变，适合放全局参数、报表对象或服务实例
+- 若某个 section 的批次列表为空，该 section 会从输出中整体移除
+- 未出现在 `section_batches` 里的 section 仍按静态页组正常渲染一次
+
 ## 6. 模板校验
 
 ```python
@@ -174,6 +210,7 @@ report = engine.validate(template_path="examples/assets/report_template.pptx")
 - 原生 `table` placeholder 与 `TableContent` 尺寸不一致时会直接报错
 - 若只需更新原生表格中的少量 cell，优先返回 `TableCellsContent`
 - 若渲染后还需要结构调整，使用 `PptOperations`
+- 若一组模板页需要按不固定批次重复展开，优先使用 `render(..., section_batches=...)`
 - 若只是做字段替换，不必走完整 `PptTemplateEngine`，可直接用 `TextReplacer`
 
 ## 8. 可直接运行的示例

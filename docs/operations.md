@@ -37,9 +37,11 @@ print(result.warnings)
 
 - 遍历所有 slide 的文本框与表格单元格
 - 支持组内 shape
-- 可通过 `rendered_shape_ids` 跳过已整体渲染的 shape
+- 可通过 `rendered_shapes={(slide_index, shape_id), ...}` 跳过已整体渲染的 shape
 - 缺失字段替换为空串，并在 `warnings` 中记录
-- 该模块只负责字段替换，不负责 placeholder 级样式保持
+- 只有实际发生字段替换时才会写回
+- 单个 run 内完整出现的 `{{field}}` 会原位替换并尽量保留原格式
+- 若字段被拆到多个 run 或段落里，当前会保留原文不动，并记录 warning
 
 ## 2. PptOperations
 
@@ -154,6 +156,7 @@ ops.merge_table_cells(
 与模板渲染的关系：
 
 - 若你通过 `PptTemplateEngine` 渲染 `text` placeholder，SDK 会保留原文本框格式，并继承原 placeholder 首段首 run 的主样式。
+- 若你通过 `PptTemplateEngine.render(..., section_batches=...)` 按 section 批量展开页面，结构扩展会先完成，再在各批次页组上执行正常 placeholder 渲染与字段替换。
 - 若 `table` placeholder 本身是原生表格，SDK 会原位写回单元格文本，保留列宽、行高和单元格样式。
 - 原生表格 placeholder 与 `TableContent` 尺寸不一致时会直接报错，不会自动增删行列。
 - 若只更新原生表格中的部分 cell，使用 `TableCellsContent` 或 `patch_table_cells()`。
